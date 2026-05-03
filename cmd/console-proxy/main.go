@@ -31,8 +31,7 @@ func main() {
 		tlsKeyFile             string
 		vmClusterMode          string
 	)
-	flag.IntVar(&port, "port",
-		envIntOrDefault(envPort, 8443),
+	flag.IntVar(&port, "port", 8443,
 		"Port for the HTTPS API server that handles console WebSocket connections")
 	flag.StringVar(&healthProbeBindAddress, "health-probe-bind-address",
 		envOrDefault(envHealthProbeBindAddress, ":8081"),
@@ -53,6 +52,18 @@ func main() {
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	if !isFlagSet("port") {
+		if v := os.Getenv(envPort); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				logger.Warn("Invalid value for env var, using default",
+					"env", envPort, "value", v, "default", port, "error", err)
+			} else {
+				port = n
+			}
+		}
+	}
 
 	hubConfig, err := rest.InClusterConfig()
 	if err != nil {
@@ -134,15 +145,12 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
-func envIntOrDefault(key string, fallback int) int {
-	v := os.Getenv(key)
-	if v == "" {
-		return fallback
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "invalid value %q for %s: %v\n", v, key, err)
-		os.Exit(1)
-	}
-	return n
+func isFlagSet(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }

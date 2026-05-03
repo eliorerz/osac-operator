@@ -34,7 +34,10 @@ var _ = Describe("Console Proxy", Ordered, func() {
 	BeforeAll(func() {
 		By("creating the console-proxy namespace")
 		cmd := exec.Command("kubectl", "create", "ns", consoleProxyNamespace)
-		_, _ = utils.Run(cmd)
+		_, err := utils.Run(cmd)
+		if err != nil && !strings.Contains(err.Error(), "AlreadyExists") {
+			Fail(fmt.Sprintf("failed to create namespace %s: %v", consoleProxyNamespace, err))
+		}
 
 		By("creating a self-signed ClusterIssuer for cert-manager")
 		cmd = exec.Command("kubectl", "apply", "-f", "-")
@@ -45,7 +48,7 @@ metadata:
 spec:
   selfSigned: {}
 `)
-		_, err := utils.Run(cmd)
+		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 
 		By("deploying the console-proxy")

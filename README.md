@@ -129,13 +129,13 @@ registers itself as a Kubernetes
 [aggregated API server](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/apiserver-aggregation/)
 under `console.osac.openshift.io/v1alpha1` and exposes a single subresource:
 
-```
+```text
 GET /apis/console.osac.openshift.io/v1alpha1/namespaces/{ns}/computeinstances/{name}/console
 ```
 
 ### Request flow
 
-```
+```text
 Client (CLI / UI)
   |  gRPC bidirectional stream
   v
@@ -203,7 +203,7 @@ consumed via `osac-installer`.
 
 ### Source layout
 
-```
+```text
 cmd/console-proxy/main.go          # Entry point, CLI flags
 internal/consoleproxy/
   server.go                        # HTTPS + health probe servers, routing

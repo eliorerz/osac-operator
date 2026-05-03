@@ -84,7 +84,7 @@ func NewServer(cfg Config) (*Server, error) {
 }
 
 func (s *Server) Run(ctx context.Context) error {
-	apiHandler, authCtrl, err := buildAuthHandler(s.newAPIMux(), s.hubConfig)
+	apiHandler, authCtrl, err := buildAuthHandler(ctx, s.newAPIMux(), s.hubConfig)
 	if err != nil {
 		return fmt.Errorf("failed to build auth handler: %w", err)
 	}

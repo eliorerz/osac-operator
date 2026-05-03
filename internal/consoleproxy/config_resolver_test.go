@@ -2,9 +2,11 @@ package consoleproxy
 
 import (
 	"context"
+	"io"
 	"log/slog"
-	"strings"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
+	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -44,63 +46,65 @@ func labeledSecret(namespace, name string, data map[string][]byte) *corev1.Secre
 	}
 }
 
-var discardLogger = slog.New(slog.NewTextHandler(&discardWriter{}, nil))
+var discardLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-type discardWriter struct{}
+var _ = Describe("RemoteConfigResolver", func() {
+	var scheme *runtime.Scheme
 
-func (d *discardWriter) Write(p []byte) (int, error) { return len(p), nil }
+	BeforeEach(func() {
+		scheme = runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+	})
 
-func TestRemoteConfigResolver(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
+	DescribeTable("resolves remote kubeconfig",
+		func(namespace string, objects []runtime.Object, wantHost, wantErr string) {
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRuntimeObjects(objects...).
+				Build()
 
-	tests := []struct {
-		name      string
-		namespace string
-		objects   []runtime.Object
-		wantHost  string
-		wantErr   string
-	}{
-		{
-			name:      "success",
-			namespace: "osac-dev",
-			objects: []runtime.Object{
+			resolver := NewRemoteConfigResolver(c, discardLogger)
+			config, _, err := resolver.ResolveConfig(context.Background(), namespace)
+
+			if wantErr != "" {
+				Expect(err).To(MatchError(ContainSubstring(wantErr)))
+				return
+			}
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config.Host).To(Equal(wantHost))
+		},
+		Entry("success",
+			"osac-dev",
+			[]runtime.Object{
 				labeledSecret("osac-dev", "remote-kubeconfig", map[string][]byte{
 					remoteKubeconfigKey: validKubeconfig(),
 				}),
 			},
-			wantHost: "https://remote-cluster:6443",
-		},
-		{
-			name:      "no labeled secret",
-			namespace: "osac-dev",
-			objects:   []runtime.Object{},
-			wantErr:   "no remote kubeconfig secret found",
-		},
-		{
-			name:      "secret without kubeconfig key",
-			namespace: "osac-dev",
-			objects: []runtime.Object{
+			"https://remote-cluster:6443", ""),
+		Entry("no labeled secret",
+			"osac-dev",
+			[]runtime.Object{},
+			"", "no remote kubeconfig secret found"),
+		Entry("secret without kubeconfig key",
+			"osac-dev",
+			[]runtime.Object{
 				labeledSecret("osac-dev", "bad-secret", map[string][]byte{
 					"other-key": []byte("data"),
 				}),
 			},
-			wantErr: `has no "kubeconfig" key`,
-		},
-		{
-			name:      "invalid kubeconfig data",
-			namespace: "osac-dev",
-			objects: []runtime.Object{
+			"", `has no "kubeconfig" key`),
+		Entry("invalid kubeconfig data",
+			"osac-dev",
+			[]runtime.Object{
 				labeledSecret("osac-dev", "bad-kubeconfig", map[string][]byte{
 					remoteKubeconfigKey: []byte("not valid yaml {{{"),
 				}),
 			},
-			wantErr: "parsing kubeconfig",
-		},
-		{
-			name:      "multiple secrets picks first without error",
-			namespace: "osac-dev",
-			objects: []runtime.Object{
+			"", "parsing kubeconfig"),
+		Entry("multiple secrets picks first without error",
+			"osac-dev",
+			[]runtime.Object{
 				labeledSecret("osac-dev", "first", map[string][]byte{
 					remoteKubeconfigKey: validKubeconfig(),
 				}),
@@ -108,185 +112,123 @@ func TestRemoteConfigResolver(t *testing.T) {
 					remoteKubeconfigKey: validKubeconfig(),
 				}),
 			},
-			wantHost: "https://remote-cluster:6443",
-		},
-		{
-			name:      "secret in wrong namespace is not found",
-			namespace: "osac-dev",
-			objects: []runtime.Object{
+			"https://remote-cluster:6443", ""),
+		Entry("secret in wrong namespace is not found",
+			"osac-dev",
+			[]runtime.Object{
 				labeledSecret("other-namespace", "remote-kubeconfig", map[string][]byte{
 					remoteKubeconfigKey: validKubeconfig(),
 				}),
 			},
-			wantErr: "no remote kubeconfig secret found",
-		},
-	}
+			"", "no remote kubeconfig secret found"),
+	)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	It("returns source containing the secret name", func() {
+		c := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithRuntimeObjects(labeledSecret("ns", "my-remote-kc", map[string][]byte{
+				remoteKubeconfigKey: validKubeconfig(),
+			})).
+			Build()
+
+		resolver := NewRemoteConfigResolver(c, discardLogger)
+		_, source, err := resolver.ResolveConfig(context.Background(), "ns")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(source).To(ContainSubstring("my-remote-kc"))
+	})
+})
+
+var _ = Describe("LocalConfigResolver", func() {
+	It("returns a copy of the provided config", func() {
+		original := &rest.Config{Host: "https://local-cluster:6443"}
+		resolver := NewLocalConfigResolver(original, discardLogger)
+
+		config, source, err := resolver.ResolveConfig(context.Background(), "any-namespace")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(config.Host).To(Equal(original.Host))
+		Expect(source).To(ContainSubstring("local"))
+		Expect(config).NotTo(BeIdenticalTo(original))
+	})
+})
+
+var _ = Describe("AutoConfigResolver", func() {
+	var scheme *runtime.Scheme
+
+	BeforeEach(func() {
+		scheme = runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+	})
+
+	Context("when remote secret exists", func() {
+		It("uses remote", func() {
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
-				WithRuntimeObjects(tt.objects...).
+				WithRuntimeObjects(labeledSecret("ns", "remote-kc", map[string][]byte{
+					remoteKubeconfigKey: validKubeconfig(),
+				})).
 				Build()
 
-			resolver := NewRemoteConfigResolver(c, discardLogger)
-			config, _, err := resolver.ResolveConfig(context.Background(), tt.namespace)
+			remote := NewRemoteConfigResolver(c, discardLogger)
+			local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
+			resolver := NewAutoConfigResolver(remote, local, discardLogger)
 
-			if tt.wantErr != "" {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErr)
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if config.Host != tt.wantHost {
-				t.Fatalf("host = %q, want %q", config.Host, tt.wantHost)
-			}
+			config, source, err := resolver.ResolveConfig(context.Background(), "ns")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config.Host).To(Equal("https://remote-cluster:6443"))
+			Expect(source).To(ContainSubstring("remote"))
 		})
-	}
-}
+	})
 
-func TestRemoteConfigResolver_ReturnsSourceWithSecretName(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
+	Context("when no remote secret", func() {
+		It("falls back to local", func() {
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				Build()
 
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithRuntimeObjects(labeledSecret("ns", "my-remote-kc", map[string][]byte{
-			remoteKubeconfigKey: validKubeconfig(),
-		})).
-		Build()
+			remote := NewRemoteConfigResolver(c, discardLogger)
+			local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
+			resolver := NewAutoConfigResolver(remote, local, discardLogger)
 
-	resolver := NewRemoteConfigResolver(c, discardLogger)
-	_, source, err := resolver.ResolveConfig(context.Background(), "ns")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !strings.Contains(source, "my-remote-kc") {
-		t.Fatalf("source %q should contain secret name", source)
-	}
-}
+			config, source, err := resolver.ResolveConfig(context.Background(), "ns")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config.Host).To(Equal("https://local:6443"))
+			Expect(source).To(ContainSubstring("local"))
+		})
+	})
 
-func TestLocalConfigResolver(t *testing.T) {
-	original := &rest.Config{Host: "https://local-cluster:6443"}
-	resolver := NewLocalConfigResolver(original, discardLogger)
+	Context("when kubeconfig is malformed", func() {
+		It("does not fall back", func() {
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRuntimeObjects(labeledSecret("ns", "bad", map[string][]byte{
+					remoteKubeconfigKey: []byte("not valid {{{"),
+				})).
+				Build()
 
-	config, source, err := resolver.ResolveConfig(context.Background(), "any-namespace")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if config.Host != original.Host {
-		t.Fatalf("host = %q, want %q", config.Host, original.Host)
-	}
-	if !strings.Contains(source, "local") {
-		t.Fatalf("source %q should indicate local", source)
-	}
-	if config == original {
-		t.Fatal("should return a copy, not the same pointer")
-	}
-}
+			remote := NewRemoteConfigResolver(c, discardLogger)
+			local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
+			resolver := NewAutoConfigResolver(remote, local, discardLogger)
 
-func TestAutoConfigResolver_UsesRemoteWhenAvailable(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
+			_, _, err := resolver.ResolveConfig(context.Background(), "ns")
+			Expect(err).To(MatchError(ContainSubstring("no fallback")))
+		})
+	})
 
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithRuntimeObjects(labeledSecret("ns", "remote-kc", map[string][]byte{
-			remoteKubeconfigKey: validKubeconfig(),
-		})).
-		Build()
+	Context("when kubeconfig key is missing", func() {
+		It("does not fall back", func() {
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRuntimeObjects(labeledSecret("ns", "no-key", map[string][]byte{
+					"wrong-key": validKubeconfig(),
+				})).
+				Build()
 
-	remote := NewRemoteConfigResolver(c, discardLogger)
-	local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
-	resolver := NewAutoConfigResolver(remote, local, discardLogger)
+			remote := NewRemoteConfigResolver(c, discardLogger)
+			local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
+			resolver := NewAutoConfigResolver(remote, local, discardLogger)
 
-	config, source, err := resolver.ResolveConfig(context.Background(), "ns")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if config.Host != "https://remote-cluster:6443" {
-		t.Fatalf("expected remote host, got %q", config.Host)
-	}
-	if !strings.Contains(source, "remote") {
-		t.Fatalf("source %q should indicate remote", source)
-	}
-}
-
-func TestAutoConfigResolver_FallsBackToLocalWhenNoSecret(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		Build()
-
-	remote := NewRemoteConfigResolver(c, discardLogger)
-	local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
-	resolver := NewAutoConfigResolver(remote, local, discardLogger)
-
-	config, source, err := resolver.ResolveConfig(context.Background(), "ns")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if config.Host != "https://local:6443" {
-		t.Fatalf("expected local host, got %q", config.Host)
-	}
-	if !strings.Contains(source, "local") {
-		t.Fatalf("source %q should indicate local fallback", source)
-	}
-}
-
-func TestAutoConfigResolver_DoesNotFallBackOnParseError(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithRuntimeObjects(labeledSecret("ns", "bad", map[string][]byte{
-			remoteKubeconfigKey: []byte("not valid {{{"),
-		})).
-		Build()
-
-	remote := NewRemoteConfigResolver(c, discardLogger)
-	local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
-	resolver := NewAutoConfigResolver(remote, local, discardLogger)
-
-	_, _, err := resolver.ResolveConfig(context.Background(), "ns")
-	if err == nil {
-		t.Fatal("expected error for malformed kubeconfig, got nil")
-	}
-	if !strings.Contains(err.Error(), "no fallback") {
-		t.Fatalf("error %q should mention no fallback", err.Error())
-	}
-}
-
-func TestAutoConfigResolver_DoesNotFallBackOnMissingKey(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithRuntimeObjects(labeledSecret("ns", "no-key", map[string][]byte{
-			"wrong-key": validKubeconfig(),
-		})).
-		Build()
-
-	remote := NewRemoteConfigResolver(c, discardLogger)
-	local := NewLocalConfigResolver(&rest.Config{Host: "https://local:6443"}, discardLogger)
-	resolver := NewAutoConfigResolver(remote, local, discardLogger)
-
-	_, _, err := resolver.ResolveConfig(context.Background(), "ns")
-	if err == nil {
-		t.Fatal("expected error for missing kubeconfig key, got nil")
-	}
-	if !strings.Contains(err.Error(), "no fallback") {
-		t.Fatalf("error %q should mention no fallback", err.Error())
-	}
-}
+			_, _, err := resolver.ResolveConfig(context.Background(), "ns")
+			Expect(err).To(MatchError(ContainSubstring("no fallback")))
+		})
+	})
+})

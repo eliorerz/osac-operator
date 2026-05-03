@@ -4,93 +4,62 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"testing"
+
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
+	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func TestHandleAPIGroupList(t *testing.T) {
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/apis", nil)
-	req.Header.Set("Accept", "application/json")
+var _ = Describe("API Discovery", func() {
+	It("serves API group list at /apis", func() {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/apis", nil)
+		req.Header.Set("Accept", "application/json")
 
-	handleAPIGroupList(rec, req)
+		handleAPIGroupList(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusOK)
-	}
+		Expect(rec.Code).To(Equal(http.StatusOK))
 
-	var list metav1.APIGroupList
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if len(list.Groups) != 1 {
-		t.Fatalf("groups = %d, want 1", len(list.Groups))
-	}
-	group := list.Groups[0]
-	if group.Name != apiGroup {
-		t.Fatalf("group name = %q, want %q", group.Name, apiGroup)
-	}
-	if group.PreferredVersion.Version != apiVersion {
-		t.Fatalf("preferred version = %q, want %q", group.PreferredVersion.Version, apiVersion)
-	}
-}
+		var list metav1.APIGroupList
+		Expect(json.Unmarshal(rec.Body.Bytes(), &list)).To(Succeed())
+		Expect(list.Groups).To(HaveLen(1))
+		Expect(list.Groups[0].Name).To(Equal(apiGroup))
+		Expect(list.Groups[0].PreferredVersion.Version).To(Equal(apiVersion))
+	})
 
-func TestHandleAPIGroup(t *testing.T) {
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/apis/"+apiGroup, nil)
-	req.Header.Set("Accept", "application/json")
+	It("serves API group", func() {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/apis/"+apiGroup, nil)
+		req.Header.Set("Accept", "application/json")
 
-	handleAPIGroup(rec, req)
+		handleAPIGroup(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusOK)
-	}
+		Expect(rec.Code).To(Equal(http.StatusOK))
 
-	var group metav1.APIGroup
-	if err := json.Unmarshal(rec.Body.Bytes(), &group); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if group.Name != apiGroup {
-		t.Fatalf("name = %q, want %q", group.Name, apiGroup)
-	}
-	if len(group.Versions) != 1 {
-		t.Fatalf("versions = %d, want 1", len(group.Versions))
-	}
-	if group.Versions[0].Version != apiVersion {
-		t.Fatalf("version = %q, want %q", group.Versions[0].Version, apiVersion)
-	}
-}
+		var group metav1.APIGroup
+		Expect(json.Unmarshal(rec.Body.Bytes(), &group)).To(Succeed())
+		Expect(group.Name).To(Equal(apiGroup))
+		Expect(group.Versions).To(HaveLen(1))
+		Expect(group.Versions[0].Version).To(Equal(apiVersion))
+	})
 
-func TestHandleAPIResourceList(t *testing.T) {
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/apis/"+apiGroup+"/"+apiVersion, nil)
-	req.Header.Set("Accept", "application/json")
+	It("serves API resource list", func() {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/apis/"+apiGroup+"/"+apiVersion, nil)
+		req.Header.Set("Accept", "application/json")
 
-	handleAPIResourceList(rec, req)
+		handleAPIResourceList(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status code = %d, want %d", rec.Code, http.StatusOK)
-	}
+		Expect(rec.Code).To(Equal(http.StatusOK))
 
-	var list metav1.APIResourceList
-	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
-		t.Fatalf("failed to decode response: %v", err)
-	}
-	if list.GroupVersion != apiGroup+"/"+apiVersion {
-		t.Fatalf("groupVersion = %q, want %q", list.GroupVersion, apiGroup+"/"+apiVersion)
-	}
-	if len(list.APIResources) != 1 {
-		t.Fatalf("resources = %d, want 1", len(list.APIResources))
-	}
-	res := list.APIResources[0]
-	if res.Name != "computeinstances/console" {
-		t.Fatalf("resource name = %q, want %q", res.Name, "computeinstances/console")
-	}
-	if !res.Namespaced {
-		t.Fatal("resource should be namespaced")
-	}
-	if len(res.Verbs) != 1 || res.Verbs[0] != "get" {
-		t.Fatalf("verbs = %v, want [get]", res.Verbs)
-	}
-}
+		var list metav1.APIResourceList
+		Expect(json.Unmarshal(rec.Body.Bytes(), &list)).To(Succeed())
+		Expect(list.GroupVersion).To(Equal(apiGroup + "/" + apiVersion))
+		Expect(list.APIResources).To(HaveLen(1))
+		Expect(list.APIResources[0].Name).To(Equal("computeinstances/console"))
+		Expect(list.APIResources[0].Kind).To(Equal("ComputeInstance"))
+		Expect(list.APIResources[0].Namespaced).To(BeTrue())
+		Expect(list.APIResources[0].Verbs).To(Equal(metav1.Verbs{"get"}))
+	})
+})

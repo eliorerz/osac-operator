@@ -19,6 +19,7 @@ package e2e
 import (
 	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,7 +57,10 @@ var _ = BeforeSuite(func() {
 
 	By("creating manager namespace")
 	cmd = exec.Command("kubectl", "create", "ns", operatorNamespace)
-	_, _ = utils.Run(cmd)
+	_, err = utils.Run(cmd)
+	if err != nil && !strings.Contains(err.Error(), "AlreadyExists") {
+		Fail(fmt.Sprintf("failed to create namespace %s: %v", operatorNamespace, err))
+	}
 
 	By("deploying the controller-manager")
 	cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", operatorImage))

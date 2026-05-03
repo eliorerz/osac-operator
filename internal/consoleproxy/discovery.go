@@ -44,6 +44,7 @@ func handleAPIResourceList(w http.ResponseWriter, r *http.Request) {
 		GroupVersion: apiGroup + "/" + apiVersion,
 		APIResources: []metav1.APIResource{{
 			Name:       "computeinstances/console",
+			Kind:       "ComputeInstance",
 			Namespaced: true,
 			Verbs:      metav1.Verbs{"get"},
 		}},

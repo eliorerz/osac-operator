@@ -40,7 +40,7 @@ func (c *authController) Run(ctx context.Context) {
 	go c.headers.Run(ctx, 1)
 }
 
-func buildAuthHandler(handler http.Handler, hubConfig *rest.Config) (http.Handler, *authController, error) {
+func buildAuthHandler(ctx context.Context, handler http.Handler, hubConfig *rest.Config) (http.Handler, *authController, error) {
 	kubeClient, err := clientset.NewForConfig(hubConfig)
 	if err != nil {
 		return nil, nil, err
@@ -69,7 +69,7 @@ func buildAuthHandler(handler http.Handler, hubConfig *rest.Config) (http.Handle
 	)
 
 	ctrl := &authController{ca: caProvider, headers: headerProvider}
-	if err := ctrl.RunOnce(context.TODO()); err != nil {
+	if err := ctrl.RunOnce(ctx); err != nil {
 		return nil, nil, err
 	}
 

@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"testing"
 	"time"
 
 	"github.com/coder/websocket"
+	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
+	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -26,188 +28,182 @@ import (
 	osacv1alpha1 "github.com/osac-project/osac-operator/api/v1alpha1"
 )
 
-func TestConsoleURLFromConfig(t *testing.T) {
-	tests := []struct {
-		name      string
-		host      string
-		namespace string
-		vmName    string
-		wantURL   string
-		wantErr   string
-	}{
-		{
-			name:      "preserves API path prefix",
-			host:      "https://gateway.example/cluster-a",
-			namespace: "tenant-a",
-			vmName:    "vm-a",
-			wantURL:   "wss://gateway.example/cluster-a/apis/subresources.kubevirt.io/v1/namespaces/tenant-a/virtualmachineinstances/vm-a/console",
-		},
-		{
-			name:      "converts http to ws",
-			host:      "http://gateway.example/base/",
-			namespace: "tenant-a",
-			vmName:    "vm-a",
-			wantURL:   "ws://gateway.example/base/apis/subresources.kubevirt.io/v1/namespaces/tenant-a/virtualmachineinstances/vm-a/console",
-		},
-		{
-			name:      "rejects missing scheme",
-			host:      "gateway.example/cluster-a",
-			namespace: "tenant-a",
-			vmName:    "vm-a",
-			wantErr:   `unsupported remote host protocol ""`,
-		},
-	}
+var _ = Describe("consoleURLFromConfig", func() {
+	DescribeTable("builds the correct WebSocket URL",
+		func(host, namespace, vmName, wantURL, wantErr string) {
+			u, err := consoleURLFromConfig(&rest.Config{Host: host}, namespace, vmName)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			u, err := consoleURLFromConfig(&rest.Config{Host: tt.host}, tt.namespace, tt.vmName)
-			if tt.wantErr != "" {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				if err.Error() != tt.wantErr {
-					t.Fatalf("error = %q, want %q", err.Error(), tt.wantErr)
-				}
+			if wantErr != "" {
+				Expect(err).To(MatchError(wantErr))
 				return
 			}
 
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got := u.String(); got != tt.wantURL {
-				t.Fatalf("url = %q, want %q", got, tt.wantURL)
-			}
-		})
-	}
-}
+			Expect(err).NotTo(HaveOccurred())
+			Expect(u.String()).To(Equal(wantURL))
+		},
+		Entry("preserves API path prefix",
+			"https://gateway.example/cluster-a", "tenant-a", "vm-a",
+			"wss://gateway.example/cluster-a/apis/subresources.kubevirt.io/v1/namespaces/tenant-a/virtualmachineinstances/vm-a/console",
+			""),
+		Entry("converts http to ws",
+			"http://gateway.example/base/", "tenant-a", "vm-a",
+			"ws://gateway.example/base/apis/subresources.kubevirt.io/v1/namespaces/tenant-a/virtualmachineinstances/vm-a/console",
+			""),
+		Entry("rejects missing scheme",
+			"gateway.example/cluster-a", "tenant-a", "vm-a",
+			"",
+			`unsupported remote host protocol ""`),
+	)
+})
 
-func TestHandleConsole_Errors(t *testing.T) {
-	tests := []struct {
-		name     string
-		objects  []client.Object
-		resolver func(t *testing.T) (ConfigResolver, func())
-		wantCode int
-	}{
-		{
-			name: "resolver failure returns service unavailable",
-			resolver: func(t *testing.T) (ConfigResolver, func()) {
-				return fakeConfigResolver{err: errors.New("bad kubeconfig")}, func() {}
+var _ = Describe("handleConsole", func() {
+	Context("error cases", func() {
+		DescribeTable("returns the expected status code",
+			func(objects []client.Object, makeResolver func() (ConfigResolver, func()), wantCode int) {
+				resolver, cleanup := makeResolver()
+				DeferCleanup(cleanup)
+				server := newTestServer(objects, resolver)
+
+				req := httptest.NewRequest(http.MethodGet, consolePath, nil)
+				req.SetPathValue("namespace", "tenant-a")
+				req.SetPathValue("name", "vm-a")
+
+				rec := httptest.NewRecorder()
+				server.handleConsole(rec, req)
+
+				Expect(rec.Code).To(Equal(wantCode))
 			},
-			wantCode: http.StatusServiceUnavailable,
+			Entry("resolver failure returns service unavailable",
+				nil,
+				func() (ConfigResolver, func()) {
+					return fakeConfigResolver{err: errors.New("bad kubeconfig")}, func() {}
+				},
+				http.StatusServiceUnavailable),
+			Entry("missing compute instance returns not found",
+				nil,
+				func() (ConfigResolver, func()) {
+					return fakeConfigResolver{
+						config: &rest.Config{Host: "https://fake:6443"},
+						source: "test",
+					}, func() {}
+				},
+				http.StatusNotFound),
+			Entry("missing VM reference returns service unavailable",
+				[]client.Object{
+					&osacv1alpha1.ComputeInstance{
+						ObjectMeta: metav1.ObjectMeta{Name: "vm-a", Namespace: "tenant-a"},
+					},
+				},
+				func() (ConfigResolver, func()) {
+					return fakeConfigResolver{
+						config: &rest.Config{Host: "https://fake:6443"},
+						source: "test",
+					}, func() {}
+				},
+				http.StatusServiceUnavailable),
+			Entry("dial failure returns service unavailable",
+				[]client.Object{newComputeInstance("tenant-a", "vm-a", "vm-ns", "kubevirt-vm")},
+				func() (ConfigResolver, func()) {
+					return fakeConfigResolver{
+						config: closedPortConfig(),
+						source: "test",
+					}, func() {}
+				},
+				http.StatusServiceUnavailable),
+			Entry("upstream error forwarded",
+				[]client.Object{newComputeInstance("tenant-a", "vm-a", "vm-ns", "kubevirt-vm")},
+				func() (ConfigResolver, func()) {
+					upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+						w.Header().Set("Content-Type", "application/json")
+						w.WriteHeader(http.StatusConflict)
+						_, _ = w.Write([]byte(`{"message":"vm busy"}`))
+					}))
+					return fakeConfigResolver{config: configForTLSServer(upstream), source: "test"}, upstream.Close
+				},
+				http.StatusConflict),
+		)
+	})
+
+	It("proxies WebSocket messages successfully", func() {
+		echoServer, echoCfg := startWSEchoServer()
+		DeferCleanup(echoServer.Close)
+
+		ci := newComputeInstance("tenant-a", "vm-a", "test-ns", "test-vm")
+		server := newTestServer([]client.Object{ci}, fakeConfigResolver{config: echoCfg, source: "test"})
+
+		httpServer := httptest.NewServer(server.newAPIMux())
+		DeferCleanup(httpServer.Close)
+
+		consoleURL := strings.Replace(httpServer.URL, "http://", "ws://", 1) +
+			"/apis/" + apiGroup + "/" + apiVersion + "/namespaces/tenant-a/computeinstances/vm-a/console"
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		DeferCleanup(cancel)
+
+		conn, _, err := websocket.Dial(ctx, consoleURL, nil)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = conn.CloseNow() })
+
+		testMessage := []byte("hello console")
+		Expect(conn.Write(ctx, websocket.MessageBinary, testMessage)).To(Succeed())
+
+		msgType, data, err := conn.Read(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(msgType).To(Equal(websocket.MessageBinary))
+		Expect(string(data)).To(Equal(string(testMessage)))
+
+		_ = conn.Close(websocket.StatusNormalClosure, "")
+	})
+})
+
+var _ = Describe("resolveVMReference", func() {
+	var scheme *runtime.Scheme
+
+	BeforeEach(func() {
+		scheme = runtime.NewScheme()
+		Expect(clientgoscheme.AddToScheme(scheme)).To(Succeed())
+		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+	})
+
+	DescribeTable("returns the expected result",
+		func(objects []client.Object, wantNS, wantName string, wantCode int, wantReason metav1.StatusReason, wantMessage string) {
+			server := &Server{
+				hubClient: fake.NewClientBuilder().
+					WithScheme(scheme).
+					WithObjects(objects...).
+					Build(),
+			}
+
+			vmNS, vmName, err := server.resolveVMReference(context.Background(), "tenant-a", "vm-a")
+
+			if wantNS != "" {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(vmNS).To(Equal(wantNS))
+				Expect(vmName).To(Equal(wantName))
+				return
+			}
+
+			Expect(err).To(HaveOccurred())
+			status := statusFromError(err)
+			Expect(int(status.Code)).To(Equal(wantCode))
+			Expect(status.Reason).To(Equal(wantReason))
+			if wantMessage != "" {
+				Expect(status.Message).To(ContainSubstring(wantMessage))
+			}
 		},
-		{
-			name: "missing compute instance returns not found",
-			resolver: func(t *testing.T) (ConfigResolver, func()) {
-				return fakeConfigResolver{
-					config: &rest.Config{Host: "https://fake:6443"},
-					source: "test",
-				}, func() {}
-			},
-			wantCode: http.StatusNotFound,
-		},
-		{
-			name: "missing VM reference returns service unavailable",
-			objects: []client.Object{
+		Entry("missing compute instance returns not found",
+			[]client.Object{},
+			"", "", http.StatusNotFound, metav1.StatusReasonNotFound, ""),
+		Entry("missing VM reference returns service unavailable",
+			[]client.Object{
 				&osacv1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{Name: "vm-a", Namespace: "tenant-a"},
 				},
 			},
-			resolver: func(t *testing.T) (ConfigResolver, func()) {
-				return fakeConfigResolver{
-					config: &rest.Config{Host: "https://fake:6443"},
-					source: "test",
-				}, func() {}
-			},
-			wantCode: http.StatusServiceUnavailable,
-		},
-		{
-			name:    "dial failure returns service unavailable",
-			objects: []client.Object{newComputeInstance("tenant-a", "vm-a", "vm-ns", "kubevirt-vm")},
-			resolver: func(t *testing.T) (ConfigResolver, func()) {
-				return fakeConfigResolver{
-					config: closedPortConfig(t),
-					source: "test",
-				}, func() {}
-			},
-			wantCode: http.StatusServiceUnavailable,
-		},
-		{
-			name:    "upstream error forwarded",
-			objects: []client.Object{newComputeInstance("tenant-a", "vm-a", "vm-ns", "kubevirt-vm")},
-			resolver: func(t *testing.T) (ConfigResolver, func()) {
-				upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusConflict)
-					_, _ = w.Write([]byte(`{"message":"vm busy"}`))
-				}))
-				return fakeConfigResolver{config: configForTLSServer(t, upstream), source: "test"}, upstream.Close
-			},
-			wantCode: http.StatusConflict,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resolver, cleanup := tt.resolver(t)
-			defer cleanup()
-			server := newTestServer(t, tt.objects, resolver)
-
-			req := httptest.NewRequest(http.MethodGet, consolePath, nil)
-			req.SetPathValue("namespace", "tenant-a")
-			req.SetPathValue("name", "vm-a")
-
-			rec := httptest.NewRecorder()
-			server.handleConsole(rec, req)
-
-			if rec.Code != tt.wantCode {
-				t.Fatalf("status code = %d, want %d", rec.Code, tt.wantCode)
-			}
-		})
-	}
-}
-
-func TestResolveVMReference(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = osacv1alpha1.AddToScheme(scheme)
-
-	tests := []struct {
-		name      string
-		objects   []client.Object
-		wantCode  int
-		wantNS    string
-		wantName  string
-		wantCheck func(*testing.T, metav1.Status)
-	}{
-		{
-			name:     "missing compute instance returns not found",
-			wantCode: http.StatusNotFound,
-			wantCheck: func(t *testing.T, status metav1.Status) {
-				if status.Reason != metav1.StatusReasonNotFound {
-					t.Fatalf("reason = %q, want %q", status.Reason, metav1.StatusReasonNotFound)
-				}
-			},
-		},
-		{
-			name: "missing VM reference returns service unavailable",
-			objects: []client.Object{
-				&osacv1alpha1.ComputeInstance{
-					ObjectMeta: metav1.ObjectMeta{Name: "vm-a", Namespace: "tenant-a"},
-				},
-			},
-			wantCode: http.StatusServiceUnavailable,
-			wantCheck: func(t *testing.T, status metav1.Status) {
-				if status.Reason != metav1.StatusReasonServiceUnavailable {
-					t.Fatalf("reason = %q, want %q", status.Reason, metav1.StatusReasonServiceUnavailable)
-				}
-				if !strings.Contains(status.Message, "virtual machine reference is not available yet") {
-					t.Fatalf("message = %q, want VM reference unavailable", status.Message)
-				}
-			},
-		},
-		{
-			name: "incomplete VM reference returns service unavailable",
-			objects: []client.Object{
+			"", "", http.StatusServiceUnavailable, metav1.StatusReasonServiceUnavailable,
+			"virtual machine reference is not available yet"),
+		Entry("incomplete VM reference returns service unavailable",
+			[]client.Object{
 				&osacv1alpha1.ComputeInstance{
 					ObjectMeta: metav1.ObjectMeta{Name: "vm-a", Namespace: "tenant-a"},
 					Status: osacv1alpha1.ComputeInstanceStatus{
@@ -217,268 +213,109 @@ func TestResolveVMReference(t *testing.T) {
 					},
 				},
 			},
-			wantCode: http.StatusServiceUnavailable,
-			wantCheck: func(t *testing.T, status metav1.Status) {
-				if status.Reason != metav1.StatusReasonServiceUnavailable {
-					t.Fatalf("reason = %q, want %q", status.Reason, metav1.StatusReasonServiceUnavailable)
-				}
-				if !strings.Contains(status.Message, "virtual machine reference is incomplete") {
-					t.Fatalf("message = %q, want incomplete VM reference unavailable", status.Message)
-				}
-			},
-		},
-		{
-			name:     "returns resolved VM reference",
-			objects:  []client.Object{newComputeInstance("tenant-a", "vm-a", "vm-ns", "kubevirt-vm")},
-			wantNS:   "vm-ns",
-			wantName: "kubevirt-vm",
-		},
-	}
+			"", "", http.StatusServiceUnavailable, metav1.StatusReasonServiceUnavailable,
+			"virtual machine reference is incomplete"),
+		Entry("returns resolved VM reference",
+			[]client.Object{newComputeInstance("tenant-a", "vm-a", "vm-ns", "kubevirt-vm")},
+			"vm-ns", "kubevirt-vm", 0, metav1.StatusReason(""), ""),
+	)
+})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			server := &Server{
-				hubClient: fake.NewClientBuilder().
-					WithScheme(scheme).
-					WithObjects(tt.objects...).
-					Build(),
-			}
-
-			vmNS, vmName, err := server.resolveVMReference(context.Background(), "tenant-a", "vm-a")
-
-			if tt.wantNS != "" {
-				if err != nil {
-					t.Fatalf("unexpected error: %v", err)
-				}
-				if vmNS != tt.wantNS {
-					t.Fatalf("vmNamespace = %q, want %q", vmNS, tt.wantNS)
-				}
-				if vmName != tt.wantName {
-					t.Fatalf("vmName = %q, want %q", vmName, tt.wantName)
-				}
-				return
-			}
-
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			status := statusFromError(t, err)
-			if int(status.Code) != tt.wantCode {
-				t.Fatalf("code = %d, want %d", status.Code, tt.wantCode)
-			}
-			tt.wantCheck(t, status)
-		})
-	}
-}
-
-func TestForwardUpstreamResponse(t *testing.T) {
-	tests := []struct {
-		name            string
-		statusCode      int
-		contentType     string
-		body            string
-		wantCode        int
-		wantContentType string
-		wantBody        string
-	}{
-		{
-			name:            "forwards JSON status body",
-			statusCode:      http.StatusConflict,
-			contentType:     "application/json",
-			body:            `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"virtual machine instance is not ready","reason":"Conflict","code":409}`,
-			wantCode:        http.StatusConflict,
-			wantContentType: "application/json",
-			wantBody:        `{"kind":"Status","apiVersion":"v1","status":"Failure","message":"virtual machine instance is not ready","reason":"Conflict","code":409}`,
-		},
-		{
-			name:            "forwards plain text body",
-			statusCode:      http.StatusServiceUnavailable,
-			contentType:     "text/plain",
-			body:            "Active VNC connection. Request denied.",
-			wantCode:        http.StatusServiceUnavailable,
-			wantContentType: "text/plain",
-			wantBody:        "Active VNC connection. Request denied.",
-		},
-		{
-			name:       "handles missing content type",
-			statusCode: http.StatusBadGateway,
-			body:       "bad gateway",
-			wantCode:   http.StatusBadGateway,
-			wantBody:   "bad gateway",
-		},
-		{
-			name:       "handles nil body",
-			statusCode: http.StatusInternalServerError,
-			wantCode:   http.StatusInternalServerError,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+var _ = Describe("forwardUpstreamResponse", func() {
+	DescribeTable("forwards the response correctly",
+		func(statusCode int, contentType, body string, wantCode int, wantContentType, wantBody string) {
 			resp := &http.Response{
-				StatusCode: tt.statusCode,
+				StatusCode: statusCode,
 				Header:     http.Header{},
 			}
-			if tt.contentType != "" {
-				resp.Header.Set("Content-Type", tt.contentType)
+			if contentType != "" {
+				resp.Header.Set("Content-Type", contentType)
 			}
-			if tt.body != "" {
-				resp.Body = io.NopCloser(strings.NewReader(tt.body))
+			if body != "" {
+				resp.Body = io.NopCloser(strings.NewReader(body))
 			}
 
 			rec := httptest.NewRecorder()
 			forwardUpstreamResponse(rec, resp)
 
-			if rec.Code != tt.wantCode {
-				t.Fatalf("status code = %d, want %d", rec.Code, tt.wantCode)
+			Expect(rec.Code).To(Equal(wantCode))
+			if wantContentType != "" {
+				Expect(rec.Header().Get("Content-Type")).To(Equal(wantContentType))
 			}
-			if tt.wantContentType != "" {
-				if got := rec.Header().Get("Content-Type"); got != tt.wantContentType {
-					t.Fatalf("Content-Type = %q, want %q", got, tt.wantContentType)
-				}
-			}
-			if got := rec.Body.String(); got != tt.wantBody {
-				t.Fatalf("body = %q, want %q", got, tt.wantBody)
-			}
-		})
-	}
-}
-
-func TestNewConsoleConnectStatusError(t *testing.T) {
-	resp := &http.Response{
-		StatusCode: http.StatusConflict,
-		Status:     "409 Conflict",
-	}
-
-	tests := []struct {
-		name  string
-		resp  *http.Response
-		check func(*testing.T, error)
-	}{
-		{
-			name: "returns upstream error when response is non-nil",
-			resp: resp,
-			check: func(t *testing.T, err error) {
-				var ue *upstreamError
-				if !errors.As(err, &ue) {
-					t.Fatalf("expected *upstreamError, got %T", err)
-				}
-				if ue.resp != resp {
-					t.Fatal("upstreamError should wrap the original response")
-				}
-			},
+			Expect(rec.Body.String()).To(Equal(wantBody))
 		},
-		{
-			name: "returns service unavailable when response is nil",
-			check: func(t *testing.T, err error) {
-				if !apierrors.IsServiceUnavailable(err) {
-					t.Fatalf("expected ServiceUnavailable, got %T: %v", err, err)
-				}
-			},
-		},
-	}
+		Entry("forwards JSON status body",
+			http.StatusConflict, "application/json",
+			`{"kind":"Status","apiVersion":"v1","status":"Failure","message":"virtual machine instance is not ready","reason":"Conflict","code":409}`,
+			http.StatusConflict, "application/json",
+			`{"kind":"Status","apiVersion":"v1","status":"Failure","message":"virtual machine instance is not ready","reason":"Conflict","code":409}`),
+		Entry("forwards plain text body",
+			http.StatusServiceUnavailable, "text/plain",
+			"Active VNC connection. Request denied.",
+			http.StatusServiceUnavailable, "text/plain",
+			"Active VNC connection. Request denied."),
+		Entry("handles missing content type",
+			http.StatusBadGateway, "", "bad gateway",
+			http.StatusBadGateway, "", "bad gateway"),
+		Entry("handles nil body",
+			http.StatusInternalServerError, "", "",
+			http.StatusInternalServerError, "", ""),
+	)
+})
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := newConsoleConnectStatusError(errors.New("dial failed"), tt.resp)
-			tt.check(t, err)
-		})
-	}
-}
+var _ = Describe("newConsoleConnectStatusError", func() {
+	It("returns upstream error when response is non-nil", func() {
+		resp := &http.Response{
+			StatusCode: http.StatusConflict,
+			Status:     "409 Conflict",
+		}
 
-func TestDialConsole(t *testing.T) {
-	tests := []struct {
-		name    string
-		setup   func(t *testing.T) (*rest.Config, func())
-		wantErr bool
-	}{
-		{
-			name: "success",
-			setup: func(t *testing.T) (*rest.Config, func()) {
-				ts, cfg := startWSEchoServer(t)
-				return cfg, ts.Close
-			},
-		},
-		{
-			name: "invalid host",
-			setup: func(t *testing.T) (*rest.Config, func()) {
-				return &rest.Config{Host: "://bad"}, func() {}
-			},
-			wantErr: true,
-		},
-		{
-			name: "connection refused",
-			setup: func(t *testing.T) (*rest.Config, func()) {
-				return closedPortConfig(t), func() {}
-			},
-			wantErr: true,
-		},
-	}
+		err := newConsoleConnectStatusError(errors.New("dial failed"), resp)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg, cleanup := tt.setup(t)
-			defer cleanup()
+		var ue *upstreamError
+		Expect(errors.As(err, &ue)).To(BeTrue())
+		Expect(ue.resp).To(Equal(resp))
+	})
+
+	It("returns service unavailable when response is nil", func() {
+		err := newConsoleConnectStatusError(errors.New("dial failed"), nil)
+		Expect(apierrors.IsServiceUnavailable(err)).To(BeTrue())
+	})
+})
+
+var _ = Describe("dialConsole", func() {
+	DescribeTable("handles connection scenarios",
+		func(setup func() (*rest.Config, func()), wantErr bool) {
+			cfg, cleanup := setup()
+			DeferCleanup(cleanup)
 
 			server := &Server{logger: discardLogger}
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
+			DeferCleanup(cancel)
 
 			conn, err := server.dialConsole(ctx, cfg, "test-ns", "test-vm")
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
+			if wantErr {
+				Expect(err).To(HaveOccurred())
 				return
 			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
+			Expect(err).NotTo(HaveOccurred())
 			_ = conn.CloseNow()
-		})
-	}
-}
-
-func TestHandleConsole_SuccessfulWebSocketProxy(t *testing.T) {
-	echoServer, echoCfg := startWSEchoServer(t)
-	defer echoServer.Close()
-
-	ci := newComputeInstance("tenant-a", "vm-a", "test-ns", "test-vm")
-	server := newTestServer(t, []client.Object{ci}, fakeConfigResolver{config: echoCfg, source: "test"})
-
-	httpServer := httptest.NewServer(server.newAPIMux())
-	defer httpServer.Close()
-
-	consoleURL := strings.Replace(httpServer.URL, "http://", "ws://", 1) +
-		"/apis/" + apiGroup + "/" + apiVersion + "/namespaces/tenant-a/computeinstances/vm-a/console"
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, _, err := websocket.Dial(ctx, consoleURL, nil)
-	if err != nil {
-		t.Fatalf("failed to dial console: %v", err)
-	}
-	defer func() { _ = conn.CloseNow() }()
-
-	testMessage := []byte("hello console")
-	if err := conn.Write(ctx, websocket.MessageBinary, testMessage); err != nil {
-		t.Fatalf("failed to write message: %v", err)
-	}
-
-	msgType, data, err := conn.Read(ctx)
-	if err != nil {
-		t.Fatalf("failed to read echo: %v", err)
-	}
-	if msgType != websocket.MessageBinary {
-		t.Fatalf("message type = %v, want Binary", msgType)
-	}
-	if string(data) != string(testMessage) {
-		t.Fatalf("echo = %q, want %q", data, testMessage)
-	}
-
-	_ = conn.Close(websocket.StatusNormalClosure, "")
-}
+		},
+		Entry("success",
+			func() (*rest.Config, func()) {
+				ts, cfg := startWSEchoServer()
+				return cfg, ts.Close
+			}, false),
+		Entry("invalid host",
+			func() (*rest.Config, func()) {
+				return &rest.Config{Host: "://bad"}, func() {}
+			}, true),
+		Entry("connection refused",
+			func() (*rest.Config, func()) {
+				return closedPortConfig(), func() {}
+			}, true),
+	)
+})
 
 // --- Test helpers ---
 
@@ -492,12 +329,10 @@ func (f fakeConfigResolver) ResolveConfig(_ context.Context, _ string) (*rest.Co
 	return f.config, f.source, f.err
 }
 
-func newTestServer(t *testing.T, objects []client.Object, resolver ConfigResolver) *Server {
-	t.Helper()
-
+func newTestServer(objects []client.Object, resolver ConfigResolver) *Server {
 	scheme := runtime.NewScheme()
-	_ = clientgoscheme.AddToScheme(scheme)
-	_ = osacv1alpha1.AddToScheme(scheme)
+	Expect(clientgoscheme.AddToScheme(scheme)).To(Succeed())
+	Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
 	builder := fake.NewClientBuilder().WithScheme(scheme)
 	if len(objects) > 0 {
@@ -527,9 +362,7 @@ func newComputeInstance(namespace, name, vmNS, vmName string) *osacv1alpha1.Comp
 	}
 }
 
-func startWSEchoServer(t *testing.T) (*httptest.Server, *rest.Config) {
-	t.Helper()
-
+func startWSEchoServer() (*httptest.Server, *rest.Config) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -553,18 +386,14 @@ func startWSEchoServer(t *testing.T) (*httptest.Server, *rest.Config) {
 	})
 
 	ts := httptest.NewTLSServer(mux)
-	cfg := configForTLSServer(t, ts)
+	cfg := configForTLSServer(ts)
 	return ts, cfg
 }
 
-func configForTLSServer(t *testing.T, ts *httptest.Server) *rest.Config {
-	t.Helper()
-
+func configForTLSServer(ts *httptest.Server) *rest.Config {
 	cert := ts.TLS.Certificates[0]
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
-	if err != nil {
-		t.Fatalf("failed to parse test server certificate: %v", err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 	caData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw})
 
 	return &rest.Config{
@@ -575,13 +404,9 @@ func configForTLSServer(t *testing.T, ts *httptest.Server) *rest.Config {
 	}
 }
 
-func closedPortConfig(t *testing.T) *rest.Config {
-	t.Helper()
-
+func closedPortConfig() *rest.Config {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("failed to create listener: %v", err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
 
@@ -591,12 +416,8 @@ func closedPortConfig(t *testing.T) *rest.Config {
 	}
 }
 
-func statusFromError(t *testing.T, err error) metav1.Status {
-	t.Helper()
-
+func statusFromError(err error) metav1.Status {
 	statusErr, ok := err.(interface{ Status() metav1.Status })
-	if !ok {
-		t.Fatalf("error does not expose Kubernetes status: %T", err)
-	}
+	Expect(ok).To(BeTrue(), "error does not expose Kubernetes status: %T", err)
 	return statusErr.Status()
 }
