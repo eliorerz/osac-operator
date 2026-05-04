@@ -104,6 +104,14 @@ test/e2e/                  # End-to-end tests
 - Linter config in `.golangci.yml`
 - Run manually: `pre-commit run --all-files`
 
+## Claude Code Hooks
+
+Hooks are configured in `.claude/settings.json` and run automatically during Claude Code sessions:
+
+- **CRD type changes** (`PostToolUse`): When `*_types.go` is edited, `make manifests generate` runs automatically.
+- **Go module changes** (`PostToolUse`): When `go.mod` is edited, `go mod tidy` runs automatically.
+- **Pre-PR** (`PreToolUse`): `make fmt` (fails if files changed — commit fixes first), `make lint`, and `make test` run before `gh pr create`.
+
 ## Detailed Rules (auto-loaded from `.claude/rules/`)
 
 - **`controller-patterns.md`** — Dual-controller, reconciliation, finalizer, AAP, feedback, CRD type patterns
