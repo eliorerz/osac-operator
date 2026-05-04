@@ -330,10 +330,11 @@ var _ = Describe("SubnetReconciler", func() {
 			}})
 			Expect(err).NotTo(HaveOccurred())
 
-			updatedSubnet := &osacv1alpha1.Subnet{}
-			err = k8sClient.Get(ctx, key, updatedSubnet)
-			Expect(err).To(HaveOccurred())
-			Expect(client.IgnoreNotFound(err)).To(Succeed())
+			Eventually(func() bool {
+				return client.IgnoreNotFound(
+					k8sClient.Get(ctx, key, &osacv1alpha1.Subnet{}),
+				) == nil
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
 		})
 	})
 

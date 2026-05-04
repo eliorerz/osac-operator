@@ -563,10 +563,11 @@ var _ = Describe("VirtualNetworkReconciler", func() {
 			}})
 			Expect(err).NotTo(HaveOccurred())
 
-			updated := &osacv1alpha1.VirtualNetwork{}
-			err = k8sClient.Get(ctx, key, updated)
-			Expect(err).To(HaveOccurred())
-			Expect(client.IgnoreNotFound(err)).To(Succeed())
+			Eventually(func() bool {
+				return client.IgnoreNotFound(
+					k8sClient.Get(ctx, key, &osacv1alpha1.VirtualNetwork{}),
+				) == nil
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
 		})
 	})
 

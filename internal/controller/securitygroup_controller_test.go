@@ -698,6 +698,9 @@ var _ = Describe("SecurityGroupReconciler", func() {
 
 			Expect(fetched.ObjectMeta.DeletionTimestamp.IsZero()).To(BeFalse())
 
+			// The fake client's Update will fail because DeletionTimestamp is
+			// immutable, but the important assertion is that the finalizer was
+			// removed from the in-memory object.
 			_, _ = reconciler.handleDelete(ctx, fetched)
 
 			Expect(fetched.Finalizers).NotTo(ContainElement(osacSecurityGroupFinalizer))

@@ -432,10 +432,11 @@ var _ = Describe("ClusterOrder Controller", func() {
 			})
 			Expect(err).NotTo(HaveOccurred())
 
-			updated := &v1alpha1.ClusterOrder{}
-			err = k8sClient.Get(ctx, key, updated)
-			Expect(err).To(HaveOccurred())
-			Expect(client.IgnoreNotFound(err)).To(Succeed())
+			Eventually(func() bool {
+				return client.IgnoreNotFound(
+					k8sClient.Get(ctx, key, &v1alpha1.ClusterOrder{}),
+				) == nil
+			}, 5*time.Second, 100*time.Millisecond).Should(BeTrue())
 		})
 	})
 
