@@ -57,21 +57,7 @@ spec:
 		Expect(err).NotTo(HaveOccurred())
 
 		By("creating auth-reader RoleBinding in kube-system")
-		cmd = exec.Command("kubectl", "apply", "-f", "-")
-		cmd.Stdin = strings.NewReader(`apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: osac-console-proxy-auth-reader
-  namespace: kube-system
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: extension-apiserver-authentication-reader
-subjects:
-- kind: ServiceAccount
-  name: osac-console-proxy
-  namespace: osac
-`)
+		cmd = exec.Command("kubectl", "apply", "-f", "config/console-proxy/auth-reader-rolebinding.yaml")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -100,8 +86,8 @@ subjects:
 		_, _ = utils.Run(cmd)
 
 		By("removing auth-reader RoleBinding from kube-system")
-		cmd = exec.Command("kubectl", "delete", "rolebinding",
-			"osac-console-proxy-auth-reader", "-n", "kube-system", "--ignore-not-found")
+		cmd = exec.Command("kubectl", "delete", "-f",
+			"config/console-proxy/auth-reader-rolebinding.yaml", "--ignore-not-found")
 		_, _ = utils.Run(cmd)
 
 		By("removing the self-signed ClusterIssuer")

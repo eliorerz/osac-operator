@@ -1,6 +1,3 @@
-# Console proxy manifests. Consumed via osac-installer, not deployed standalone.
-# The namespace transformer overrides auth-reader-rolebinding.yaml's kube-system
-# namespace. The installer overlay's replacements restore it at build time.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: osac
@@ -21,7 +18,6 @@ resources:
 - clusterrole-secret-reader.yaml
 - rolebinding-secret-reader.yaml
 - clusterrolebinding-auth-delegator.yaml
-- auth-reader-rolebinding.yaml
 
 images:
 - name: console-proxy
