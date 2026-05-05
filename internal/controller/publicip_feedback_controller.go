@@ -211,17 +211,37 @@ func (t *publicIPFeedbackReconcilerTask) handleUpdate(ctx context.Context) error
 			return err
 		}
 	}
-	t.syncPhase(ctx)
+	t.syncState(ctx)
 	t.syncAddress()
 	return nil
 }
 
 func (t *publicIPFeedbackReconcilerTask) handleDelete() {
-	if t.object.Status.Phase == v1alpha1.PublicIPPhaseFailed {
+	if t.object.Status.State == v1alpha1.PublicIPStateFailed {
 		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_FAILED)
 		return
 	}
 	t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_RELEASING)
+}
+
+func (t *publicIPFeedbackReconcilerTask) syncState(ctx context.Context) {
+	switch t.object.Status.State {
+	case v1alpha1.PublicIPStatePending:
+		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_PENDING)
+	case v1alpha1.PublicIPStateAllocated:
+		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_ALLOCATED)
+	case v1alpha1.PublicIPStateAttaching:
+		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_ATTACHING)
+	case v1alpha1.PublicIPStateAttached:
+		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_ATTACHED)
+	case v1alpha1.PublicIPStateReleasing:
+		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_RELEASING)
+	case v1alpha1.PublicIPStateFailed:
+		t.publicIP.GetStatus().SetState(privatev1.PublicIPState_PUBLIC_IP_STATE_FAILED)
+	default:
+		log := ctrllog.FromContext(ctx)
+		log.Info("Unknown state, will ignore it", "state", t.object.Status.State)
+	}
 }
 
 func (t *publicIPFeedbackReconcilerTask) syncPhase(ctx context.Context) {
