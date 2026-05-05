@@ -264,6 +264,12 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 	} else if publicIP.Status.State == v1alpha1.PublicIPStateAttached && publicIP.Spec.ComputeInstance == "" {
 		publicIP.Status.Phase = v1alpha1.PublicIPPhaseProgressing
 		publicIP.Status.State = v1alpha1.PublicIPStateReleasing
+		// D-07: emit detach event (Normal for manual detach)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(publicIP, nil, corev1.EventTypeNormal,
+				eventReasonDetached, eventActionReconcile,
+				"PublicIP detached from ComputeInstance")
+		}
 	} else if publicIP.Status.Phase == "" || (publicIP.Status.Phase == v1alpha1.PublicIPPhaseReady &&
 		!provisioning.IsConfigApplied(&publicIP.Status.Jobs, publicIP.Status.DesiredConfigVersion)) {
 		// Transition to Progressing on first provision or when spec changed after a previous
@@ -330,11 +336,33 @@ func (r *PublicIPReconciler) syncComputeInstanceTargetNamespaceAnnotation(
 		return false, false, err
 	}
 	if len(ciList.Items) == 0 {
+		// CI not found. If state is Attached or Failed, the CI was deleted externally
+		// (e.g., finalizer removed manually). Clear the stale reference.
+		if publicIP.Status.State == v1alpha1.PublicIPStateAttached ||
+			publicIP.Status.State == v1alpha1.PublicIPStateFailed {
+			log.Info("ComputeInstance not found, clearing stale spec reference",
+				"computeInstanceUUID", publicIP.Spec.ComputeInstance,
+				"state", publicIP.Status.State)
+			publicIP.Spec.ComputeInstance = ""
+			return true, false, nil
+		}
 		log.Info("ComputeInstance not found, requeueing", "computeInstanceUUID", publicIP.Spec.ComputeInstance)
 		return false, true, nil
 	}
 
 	ci := &ciList.Items[0]
+
+	// Auto-detach: if CI is being deleted, handle per state (D-01 through D-11)
+	if !ci.DeletionTimestamp.IsZero() {
+		autoDetachResult, err := r.handleAutoDetach(ctx, publicIP, ci)
+		if err != nil {
+			return false, false, err
+		}
+		// autoDetachResult: specChanged=true means we cleared spec.computeInstance
+		// and need to persist+refetch; requeue=true means requeue for in-flight ops
+		return autoDetachResult.specChanged, autoDetachResult.requeue, nil
+	}
+
 	if ci.Status.VirtualMachineReference == nil {
 		log.Info("ComputeInstance has no VirtualMachineReference yet, requeueing",
 			"computeInstance", ci.Name, "computeInstanceUUID", publicIP.Spec.ComputeInstance)
@@ -352,6 +380,129 @@ func (r *PublicIPReconciler) syncComputeInstanceTargetNamespaceAnnotation(
 	}
 
 	return false, false, nil
+}
+
+type autoDetachResult struct {
+	specChanged bool
+	requeue     bool
+}
+
+// handleAutoDetach processes a PublicIP whose referenced ComputeInstance is being
+// deleted. It adds a finalizer to the CI (per D-01) and clears spec.computeInstance
+// based on the current state to trigger the existing detach flow (per D-03, D-06).
+func (r *PublicIPReconciler) handleAutoDetach(
+	ctx context.Context,
+	publicIP *v1alpha1.PublicIP,
+	ci *v1alpha1.ComputeInstance,
+) (autoDetachResult, error) {
+	log := ctrllog.FromContext(ctx)
+
+	// D-01: Add finalizer to CI to guarantee detach completes before CI deletion
+	if controllerutil.AddFinalizer(ci, osacPublicIPDetachFinalizer) {
+		log.Info("adding publicip-detach finalizer to ComputeInstance",
+			"computeInstance", ci.Name,
+			"computeInstanceUUID", publicIP.Spec.ComputeInstance)
+		if err := r.Update(ctx, ci); err != nil {
+			return autoDetachResult{}, err
+		}
+	}
+
+	switch publicIP.Status.State {
+	case v1alpha1.PublicIPStateAttached:
+		// D-03/D-06: clear spec to trigger existing detach flow (Attached -> Releasing)
+		log.Info("auto-detaching PublicIP: ComputeInstance is being deleted",
+			"computeInstanceUUID", publicIP.Spec.ComputeInstance)
+		publicIP.Spec.ComputeInstance = ""
+		// D-07: emit warning event with generic message (no CI details for tenant reuse safety)
+		if r.Recorder != nil {
+			r.Recorder.Eventf(publicIP, nil, corev1.EventTypeWarning,
+				eventReasonAutoDetached, eventActionReconcile,
+				"Auto-detached: referenced ComputeInstance was deleted")
+		}
+		return autoDetachResult{specChanged: true}, nil
+
+	case v1alpha1.PublicIPStateFailed:
+		// D-11: clear stale reference, no AAP call needed. State stays Failed.
+		log.Info("clearing stale ComputeInstance reference on Failed PublicIP",
+			"computeInstanceUUID", publicIP.Spec.ComputeInstance)
+		publicIP.Spec.ComputeInstance = ""
+		return autoDetachResult{specChanged: true}, nil
+
+	case v1alpha1.PublicIPStateAttaching:
+		// D-09: let the in-flight attach complete, then auto-detach on next reconcile.
+		// OnSuccess will set state to Attached, which triggers this path again.
+		log.Info("ComputeInstance is being deleted but attach is in-flight, waiting",
+			"computeInstanceUUID", publicIP.Spec.ComputeInstance)
+		return autoDetachResult{requeue: true}, nil
+
+	case v1alpha1.PublicIPStateReleasing:
+		// D-10: detach already in progress, no-op. When detach completes,
+		// maybeRemoveCIFinalizer will handle finalizer cleanup.
+		log.Info("ComputeInstance is being deleted but detach is already in progress",
+			"computeInstanceUUID", publicIP.Spec.ComputeInstance)
+		return autoDetachResult{}, nil
+
+	case v1alpha1.PublicIPStateAllocated:
+		// Detach already completed for this PublicIP. Check if finalizer can be removed.
+		if err := r.maybeRemoveCIFinalizer(ctx, publicIP.Spec.ComputeInstance); err != nil {
+			return autoDetachResult{}, err
+		}
+		return autoDetachResult{}, nil
+
+	default:
+		log.Info("unexpected state during auto-detach, skipping",
+			"state", publicIP.Status.State,
+			"computeInstanceUUID", publicIP.Spec.ComputeInstance)
+		return autoDetachResult{}, nil
+	}
+}
+
+// maybeRemoveCIFinalizer removes the publicip-detach finalizer from the
+// ComputeInstance identified by ciUUID if no PublicIPs still reference it.
+// Per D-05, the finalizer stays until ALL PublicIPs are detached.
+func (r *PublicIPReconciler) maybeRemoveCIFinalizer(ctx context.Context, ciUUID string) error {
+	log := ctrllog.FromContext(ctx)
+
+	ciList := &v1alpha1.ComputeInstanceList{}
+	if err := r.List(ctx, ciList,
+		client.InNamespace(r.ComputeInstanceNamespace),
+		client.MatchingLabels{osacComputeInstanceIDLabel: ciUUID},
+	); err != nil {
+		return err
+	}
+	if len(ciList.Items) == 0 {
+		return nil // CI already gone
+	}
+
+	ci := &ciList.Items[0]
+	if !controllerutil.ContainsFinalizer(ci, osacPublicIPDetachFinalizer) {
+		return nil // finalizer already removed
+	}
+
+	// Check if any PublicIPs still reference this CI
+	publicIPs := &v1alpha1.PublicIPList{}
+	if err := r.List(ctx, publicIPs, client.InNamespace(r.NetworkingNamespace)); err != nil {
+		return err
+	}
+
+	for i := range publicIPs.Items {
+		if publicIPs.Items[i].Spec.ComputeInstance == ciUUID {
+			log.Info("other PublicIPs still reference CI, keeping finalizer",
+				"computeInstanceUUID", ciUUID,
+				"publicIP", publicIPs.Items[i].Name)
+			return nil
+		}
+	}
+
+	// No more references, remove finalizer
+	log.Info("all PublicIPs detached, removing CI finalizer",
+		"computeInstance", ci.Name, "computeInstanceUUID", ciUUID)
+	if controllerutil.RemoveFinalizer(ci, osacPublicIPDetachFinalizer) {
+		if err := r.Update(ctx, ci); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // handleDelete sets the Deleting phase, runs deprovisioning, and removes the finalizer
@@ -384,10 +535,15 @@ func (r *PublicIPReconciler) handleDelete(ctx context.Context, publicIP *v1alpha
 // handleProvisioning delegates to the shared provisioning lifecycle, which triggers
 // an AAP job (e.g., osac-create-public-ip) and polls its status until completion.
 func (r *PublicIPReconciler) handleProvisioning(ctx context.Context, publicIP *v1alpha1.PublicIP) (ctrl.Result, error) {
+	log := ctrllog.FromContext(ctx)
+
 	if r.ProvisioningProvider == nil {
-		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping provisioning")
+		log.Info("no provisioning provider configured, skipping provisioning")
 		return ctrl.Result{}, nil
 	}
+
+	// Capture CI UUID before provisioning (may be cleared by auto-detach flow)
+	priorCIUUID := publicIP.Spec.ComputeInstance
 
 	return provisioning.RunProvisioningLifecycle(ctx, r.ProvisioningProvider, publicIP,
 		&provisioning.State{Jobs: &publicIP.Status.Jobs, DesiredConfigVersion: publicIP.Status.DesiredConfigVersion},
@@ -401,8 +557,22 @@ func (r *PublicIPReconciler) handleProvisioning(ctx context.Context, publicIP *v
 				publicIP.Status.Phase = v1alpha1.PublicIPPhaseReady
 				if publicIP.Spec.ComputeInstance != "" {
 					publicIP.Status.State = v1alpha1.PublicIPStateAttached
+					// D-07: emit attach event
+					if r.Recorder != nil {
+						r.Recorder.Eventf(publicIP, nil, corev1.EventTypeNormal,
+							eventReasonAttached, eventActionReconcile,
+							"PublicIP attached to ComputeInstance")
+					}
 				} else {
 					publicIP.Status.State = v1alpha1.PublicIPStateAllocated
+					// After detach completes, attempt CI finalizer removal
+					if priorCIUUID != "" {
+						if err := r.maybeRemoveCIFinalizer(ctx, priorCIUUID); err != nil {
+							log.Error(err, "failed to remove CI finalizer after detach",
+								"computeInstanceUUID", priorCIUUID)
+							// Non-fatal: finalizer cleanup will retry on next reconcile
+						}
+					}
 				}
 			},
 		},
