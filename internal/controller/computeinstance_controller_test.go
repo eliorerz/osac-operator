@@ -146,22 +146,23 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}
 		})
 		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
 			controllerReconciler := NewComputeInstanceReconciler(testMcManager, "", namespaceName, &mockProvisioningProvider{name: string(provisioning.ProviderTypeAAP)}, 100*time.Millisecond, 0, mcmanager.LocalCluster)
 
-			_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			}})
-			Expect(err).NotTo(HaveOccurred())
-
-			By("Verifying tenant reference is set on ComputeInstance status")
+			// Reconcile inside Eventually: the first call may requeue if
+			// the envtest cache has not yet propagated the Tenant status
+			// update from BeforeEach. Retrying allows the cache to catch up.
 			vm := &osacv1alpha1.ComputeInstance{}
 			Eventually(func(g Gomega) {
-				Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
+				_, err := controllerReconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{
+					NamespacedName: typeNamespacedName,
+				}})
+				g.Expect(err).NotTo(HaveOccurred())
+
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, vm)).To(Succeed())
 				g.Expect(vm.Status.TenantReference).NotTo(BeNil())
 				g.Expect(vm.Status.TenantReference.Name).To(Equal(tenantName))
 				g.Expect(vm.Status.TenantReference.Namespace).To(Equal(namespaceName))
-			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+			}, 10*time.Second, 200*time.Millisecond).Should(Succeed())
 
 			By("Verifying the finalizer is set on the ComputeInstance resource")
 			Expect(vm.Finalizers).To(ContainElement(osacComputeInstanceFinalizer))
