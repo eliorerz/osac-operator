@@ -97,6 +97,10 @@ const (
 	envClusterAAPProvisionTemplate   = "OSAC_CLUSTER_AAP_PROVISION_TEMPLATE"
 	envClusterAAPDeprovisionTemplate = "OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE"
 
+	// PublicIP attachment webhook environment variables (used when OSAC_PROVISIONING_PROVIDER=eda)
+	envPublicIPAttachWebhook = "OSAC_PUBLIC_IP_ATTACH_WEBHOOK"
+	envPublicIPDetachWebhook = "OSAC_PUBLIC_IP_DETACH_WEBHOOK"
+
 	// Job history configuration
 	envMaxJobHistory = "OSAC_MAX_JOB_HISTORY"
 
@@ -457,6 +461,27 @@ func setupNetworkingControllers(
 	aapClient := aap.NewClient(aapURL, aapToken, aapInsecureSkipVerify)
 	networkingProvider := provisioning.NewAAPProviderWithPrefix(aapClient, templatePrefix)
 
+	// Create a dedicated provider for PublicIP attach/detach operations.
+	// Uses explicit template names because TriggerProvision hardcodes action="create"
+	// and TriggerDeprovision hardcodes action="delete" in resolveTemplateName. Explicit
+	// names bypass the action resolution so TriggerProvision maps to osac-attach-public-ip
+	// and TriggerDeprovision maps to osac-detach-public-ip.
+	// This provider will move to the PublicIPAttachment controller when that CRD is introduced.
+	// Poll interval is discarded (_) because we reuse statusPollInterval from the
+	// shared networking setup above.
+	publicIPAttachmentProvider, _, err := createProvider(
+		provisioning.ProviderType(helpers.GetEnvWithDefault(envProvisioningProvider, string(provisioning.ProviderTypeAAP))),
+		os.Getenv(envPublicIPAttachWebhook), os.Getenv(envPublicIPDetachWebhook),
+		aapURL, aapToken,
+		"osac-attach-public-ip", "osac-detach-public-ip",
+		"", // no prefix needed: explicit template names are always used
+		aapInsecureSkipVerify,
+		0, // minimumRequestInterval: only relevant for EDA rate limiting
+	)
+	if err != nil {
+		return fmt.Errorf("publicip attachment provider: %w", err)
+	}
+
 	// Setup VirtualNetwork controller and feedback
 	if grpcConn != nil {
 		if err := controller.NewVirtualNetworkFeedbackReconciler(
@@ -528,7 +553,7 @@ func setupNetworkingControllers(
 	// Setup PublicIP controller
 	if err := controller.NewPublicIPReconciler(
 		mgr, networkingNamespace, computeInstanceNamespace,
-		networkingProvider, statusPollInterval, maxJobHistory, targetCluster,
+		networkingProvider, publicIPAttachmentProvider, statusPollInterval, maxJobHistory, targetCluster,
 	).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("publicip controller: %w", err)
 	}

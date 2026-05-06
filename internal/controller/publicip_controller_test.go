@@ -634,7 +634,7 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateAttaching))
 		})
 
-		It("should set state to Attached when attach provisioning succeeds", func() {
+		It("should set state to Attached when attach job succeeds via attachment provider", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
 			// Start in Attaching state: persist spec first, then status.
@@ -645,7 +645,12 @@ var _ = Describe("PublicIPReconciler", func() {
 			publicIP.Status.State = osacv1alpha1.PublicIPStateAttaching
 			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
 
-			mockProvider.triggerProvisionFunc = func(
+			// Wire the attachment provider; handleAttaching uses TriggerProvision
+			// which maps to osac-attach-public-ip.
+			attachmentProvider := &mockProvisioningProvider{name: "mock-attachment"}
+			reconciler.PublicIPAttachmentProvider = attachmentProvider
+
+			attachmentProvider.triggerProvisionFunc = func(
 				ctx context.Context, resource client.Object,
 			) (*provisioning.ProvisionResult, error) {
 				return &provisioning.ProvisionResult{
@@ -655,7 +660,7 @@ var _ = Describe("PublicIPReconciler", func() {
 				}, nil
 			}
 
-			mockProvider.getProvisionStatusFunc = func(
+			attachmentProvider.getProvisionStatusFunc = func(
 				ctx context.Context, resource client.Object, jobID string,
 			) (provisioning.ProvisionStatus, error) {
 				return provisioning.ProvisionStatus{
@@ -677,6 +682,12 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
 			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseReady))
 			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateAttached))
+
+			// Verify the job was tracked as JobTypeAttach
+			latestAttach := provisioning.FindLatestJobByType(updated.Status.Jobs, osacv1alpha1.JobTypeAttach)
+			Expect(latestAttach).NotTo(BeNil())
+			Expect(latestAttach.JobID).To(Equal("attach-job"))
+			Expect(latestAttach.State).To(Equal(osacv1alpha1.JobStateSucceeded))
 		})
 
 		It("should set state to Releasing when ComputeInstance is cleared on attached IP", func() {
@@ -727,7 +738,7 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateReleasing))
 		})
 
-		It("should set state to Allocated when detach provisioning succeeds", func() {
+		It("should set state to Allocated when detach job succeeds via attachment provider", func() {
 			key := types.NamespacedName{Name: publicIP.Name, Namespace: publicIP.Namespace}
 
 			// Start in Releasing state: persist spec first, then status.
@@ -738,17 +749,21 @@ var _ = Describe("PublicIPReconciler", func() {
 			publicIP.Status.State = osacv1alpha1.PublicIPStateReleasing
 			Expect(fakeClient.Status().Update(testCtx, publicIP)).To(Succeed())
 
-			mockProvider.triggerProvisionFunc = func(
+			// Wire the attachment provider; handleDetaching uses TriggerDeprovision
+			// which maps to osac-detach-public-ip.
+			attachmentProvider := &mockProvisioningProvider{name: "mock-attachment"}
+			reconciler.PublicIPAttachmentProvider = attachmentProvider
+
+			attachmentProvider.triggerDeprovisionFunc = func(
 				ctx context.Context, resource client.Object,
-			) (*provisioning.ProvisionResult, error) {
-				return &provisioning.ProvisionResult{
-					JobID:        "detach-job",
-					InitialState: osacv1alpha1.JobStatePending,
-					Message:      "Detach job triggered",
+			) (*provisioning.DeprovisionResult, error) {
+				return &provisioning.DeprovisionResult{
+					Action: provisioning.DeprovisionTriggered,
+					JobID:  "detach-job",
 				}, nil
 			}
 
-			mockProvider.getProvisionStatusFunc = func(
+			attachmentProvider.getDeprovisionStatusFunc = func(
 				ctx context.Context, resource client.Object, jobID string,
 			) (provisioning.ProvisionStatus, error) {
 				return provisioning.ProvisionStatus{
@@ -770,6 +785,12 @@ var _ = Describe("PublicIPReconciler", func() {
 			Expect(fakeClient.Get(testCtx, key, updated)).To(Succeed())
 			Expect(updated.Status.Phase).To(Equal(osacv1alpha1.PublicIPPhaseReady))
 			Expect(updated.Status.State).To(Equal(osacv1alpha1.PublicIPStateAllocated))
+
+			// Verify the job was tracked as JobTypeDetach
+			latestDetach := provisioning.FindLatestJobByType(updated.Status.Jobs, osacv1alpha1.JobTypeDetach)
+			Expect(latestDetach).NotTo(BeNil())
+			Expect(latestDetach.JobID).To(Equal("detach-job"))
+			Expect(latestDetach.State).To(Equal(osacv1alpha1.JobStateSucceeded))
 		})
 
 		It("should set state to Failed on provisioning failure", func() {
