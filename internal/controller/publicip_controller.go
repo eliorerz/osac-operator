@@ -287,28 +287,33 @@ func (r *PublicIPReconciler) handleUpdate(ctx context.Context, publicIP *v1alpha
 		}
 	}
 
-	// Populate address after provisioning succeeds.
-	//
-	// Temporal ordering guarantee: state == Allocated is set exclusively by the
-	// OnSuccess callback in RunProvisioningLifecycle, which fires only after the
-	// AAP provisioning job reports JobStateSucceeded. Therefore this guard
-	// ensures address population happens strictly after provisioning completes,
-	// never before. One-shot attach (Pending -> Attached) skips Allocated, so
-	// that path populates the address inside OnSuccess instead.
-	if publicIP.Status.State == v1alpha1.PublicIPStateAllocated && publicIP.Status.Address == "" {
-		targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
-		if err != nil {
-			log.Error(err, "failed to get target cluster client for address lookup")
-		} else {
-			ipAddress := r.getPublicIPAddress(ctx, targetClient, publicIP.Name)
-			if ipAddress != "" {
-				publicIP.Status.Address = ipAddress
-				log.Info("populated PublicIP address from LoadBalancer Service", "address", ipAddress)
-			}
-		}
-	}
+	r.maybePopulateAddress(ctx, publicIP)
 
 	return r.handleProvisioning(ctx, publicIP, priorCIUUID)
+}
+
+// maybePopulateAddress sets status.address from the MetalLB LoadBalancer Service
+// after initial provisioning succeeds.
+//
+// State == Allocated is set exclusively by OnSuccess after the AAP provisioning
+// job reports success, so this guard ensures address population happens strictly
+// after provisioning completes. One-shot attach (Pending -> Attached) skips
+// Allocated, so that path populates the address inside OnSuccess instead.
+func (r *PublicIPReconciler) maybePopulateAddress(ctx context.Context, publicIP *v1alpha1.PublicIP) {
+	if publicIP.Status.State != v1alpha1.PublicIPStateAllocated || publicIP.Status.Address != "" {
+		return
+	}
+	log := ctrllog.FromContext(ctx)
+	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
+	if err != nil {
+		log.Error(err, "failed to get target cluster client for address lookup")
+		return
+	}
+	ipAddress := r.getPublicIPAddress(ctx, targetClient, publicIP.Name)
+	if ipAddress != "" {
+		publicIP.Status.Address = ipAddress
+		log.Info("populated PublicIP address from LoadBalancer Service", "address", ipAddress)
+	}
 }
 
 // syncComputeInstanceTargetNamespaceAnnotation resolves the VM namespace for the
