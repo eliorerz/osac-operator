@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'charts/**'
+      - 'config/crd/bases/**'
+      - '.github/workflows/helm-lint.yaml'
 
 jobs:
   helm-lint:
