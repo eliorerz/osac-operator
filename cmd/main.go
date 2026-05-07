@@ -439,6 +439,7 @@ func setupNetworkingControllers(
 	mgr mcmanager.Manager,
 	grpcConn *grpc.ClientConn,
 	maxJobHistory int,
+	minimumRequestInterval time.Duration,
 ) error {
 	localMgr := mgr.GetLocalManager()
 
@@ -476,7 +477,7 @@ func setupNetworkingControllers(
 		fmt.Sprintf("%s-attach-public-ip", templatePrefix), fmt.Sprintf("%s-detach-public-ip", templatePrefix),
 		"", // no prefix needed: explicit template names are always used
 		aapInsecureSkipVerify,
-		0, // minimumRequestInterval: only relevant for EDA rate limiting
+		minimumRequestInterval,
 	)
 	if err != nil {
 		return fmt.Errorf("publicip attachment provider: %w", err)
@@ -781,7 +782,7 @@ func main() {
 		}
 	}
 	if ctrlFlags.Networking {
-		if err := setupNetworkingControllers(mgr, grpcConn, maxJobHistory); err != nil {
+		if err := setupNetworkingControllers(mgr, grpcConn, maxJobHistory, minimumRequestInterval); err != nil {
 			setupLog.Error(err, "unable to setup networking controllers")
 			os.Exit(1)
 		}
