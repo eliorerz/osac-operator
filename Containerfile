@@ -1,9 +1,9 @@
 # Build the manager and console-proxy binaries
-FROM golang:1.25 AS builder
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
-WORKDIR /workspace
+WORKDIR /opt/app-root/src
 # Copy the Go Modules manifests (including the nested api module)
 COPY go.mod go.sum ./
 COPY api/go.mod api/go.sum api/
@@ -22,12 +22,8 @@ COPY . ./
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o manager cmd/main.go
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o console-proxy cmd/console-proxy/main.go
 
-# Use distroless as minimal base image to package the manager binary
-# Refer to https://github.com/GoogleContainerTools/distroless for more details
-FROM gcr.io/distroless/static:nonroot
-WORKDIR /
-COPY --from=builder /workspace/manager .
-COPY --from=builder /workspace/console-proxy .
-USER 65532:65532
-
-ENTRYPOINT ["/manager"]
+FROM registry.access.redhat.com/ubi10-minimal:10.2
+COPY --from=builder /opt/app-root/src/manager /usr/local/bin/
+COPY --from=builder /opt/app-root/src/console-proxy /usr/local/bin/
+USER 1001
+ENTRYPOINT ["/usr/local/bin/manager"]
