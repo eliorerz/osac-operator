@@ -49,13 +49,13 @@ var _ = Describe("PublicIPAttachmentFeedbackController", func() {
 	)
 
 	var (
-		ctx                  context.Context
-		k8sClient            client.Client
+		ctx                   context.Context
+		k8sClient             client.Client
 		mockAttachmentsServer *mockPublicIPAttachmentsServer
-		mockPublicIPsServer2 *mockPublicIPsServerForAttachment
-		reconciler           *PublicIPAttachmentFeedbackReconciler
-		grpcServer           *grpc.Server
-		listener             *bufconn.Listener
+		mockPublicIPsServer2  *mockPublicIPsServerForAttachment
+		reconciler            *PublicIPAttachmentFeedbackReconciler
+		grpcServer            *grpc.Server
+		listener              *bufconn.Listener
 	)
 
 	BeforeEach(func() {
@@ -394,9 +394,9 @@ var _ = Describe("PublicIPAttachmentFeedbackController", func() {
 		It("should remove feedback finalizer when CR without ID label is being deleted", func() {
 			cr := &v1alpha1.PublicIPAttachment{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      attachmentName,
-					Namespace: attachmentNamespace,
-					Labels:    map[string]string{},
+					Name:       attachmentName,
+					Namespace:  attachmentNamespace,
+					Labels:     map[string]string{},
 					Finalizers: []string{osacPublicIPAttachmentFeedbackFinalizer},
 				},
 				Spec: v1alpha1.PublicIPAttachmentSpec{
