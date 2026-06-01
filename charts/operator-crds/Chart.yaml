@@ -2,4 +2,4 @@ apiVersion: v2
 name: osac-operator-crds
 description: CRDs for the OSAC Operator
 type: application
-version: 0.0.0
+version: 0.1.0
