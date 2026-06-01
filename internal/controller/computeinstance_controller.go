@@ -449,12 +449,6 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 					instance.Status.Phase = v1alpha1.ComputeInstancePhaseFailed
 				}
 			},
-			IsCompleted: func() bool {
-				// EDA's GetProvisionStatus always returns Unknown.
-				// Detect completion by checking if the VM was created on the cluster.
-				latestJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeProvision)
-				return latestJob != nil && provisioning.IsEDAJobID(latestJob.JobID) && instance.Status.VirtualMachineReference != nil
-			},
 		},
 		func() bool {
 			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.mgr.GetLocalManager().GetAPIReader(), client.ObjectKeyFromObject(instance), &v1alpha1.ComputeInstance{})
@@ -466,9 +460,6 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 }
 
 // handleDeprovisioning manages the deprovisioning job lifecycle for a ComputeInstance.
-// It triggers deprovisioning if needed and polls job status until completion.
-// For EDA provider: This is called only when AAP finalizer exists (set by playbook).
-// For AAP Direct provider: This is always called to handle cancellation and deprovision.
 // Note: Finalizer management is handled by handleDelete(), not here.
 func (r *ComputeInstanceReconciler) handleDeprovisioning(ctx context.Context, instance *v1alpha1.ComputeInstance) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
