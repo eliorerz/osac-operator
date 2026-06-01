@@ -147,7 +147,6 @@ type PollCallbacks struct {
 	OnSuccess func(status ProvisionStatus)
 	// IsCompleted is called when the provider returns a non-terminal state.
 	// If it returns true, the job is marked as succeeded and polling stops.
-	// Used by EDA provider where GetProvisionStatus always returns Unknown.
 	IsCompleted func() bool
 }
 
