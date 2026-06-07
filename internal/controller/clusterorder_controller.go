@@ -571,6 +571,10 @@ func (r *ClusterOrderReconciler) handleDeprovisioning(ctx context.Context, insta
 		ctrllog.FromContext(ctx).Info("skipping deprovisioning due to management-state annotation", "management-state", val)
 		return ctrl.Result{}, nil
 	}
+	if r.ProvisioningProvider == nil {
+		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
+		return ctrl.Result{}, nil
+	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, instance,
 		&instance.Status.Jobs, r.MaxJobHistory, r.StatusPollInterval)
 	if err != nil || !done {

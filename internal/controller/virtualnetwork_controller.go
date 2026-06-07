@@ -247,6 +247,10 @@ func (r *VirtualNetworkReconciler) handleDelete(ctx context.Context, vnet *v1alp
 // handleDeprovisioning manages the deprovisioning job lifecycle for a VirtualNetwork.
 // It triggers deprovisioning if needed and polls job status until completion.
 func (r *VirtualNetworkReconciler) handleDeprovisioning(ctx context.Context, vnet *v1alpha1.VirtualNetwork) (ctrl.Result, error) {
+	if r.ProvisioningProvider == nil {
+		ctrllog.FromContext(ctx).Info("no provisioning provider configured, skipping deprovisioning")
+		return ctrl.Result{}, nil
+	}
 	result, done, err := provisioning.RunDeprovisioningLifecycle(ctx, r.ProvisioningProvider, vnet,
 		&vnet.Status.Jobs, r.MaxJobHistory, r.StatusPollInterval)
 	if err != nil || !done {
