@@ -251,6 +251,7 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 	switch template.Type {
 	case aap.TemplateTypeJob:
 		resp, err := p.client.LaunchJobTemplate(ctx, aap.LaunchJobTemplateRequest{
+			TemplateID:   template.ID,
 			TemplateName: templateName,
 			ExtraVars:    extraVars,
 		})
@@ -260,6 +261,7 @@ func (p *AAPProvider) launchTemplate(ctx context.Context, templateName string, r
 		jobID = resp.JobID
 	case aap.TemplateTypeWorkflow:
 		resp, err := p.client.LaunchWorkflowTemplate(ctx, aap.LaunchWorkflowTemplateRequest{
+			TemplateID:   template.ID,
 			TemplateName: templateName,
 			ExtraVars:    extraVars,
 		})
