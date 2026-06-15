@@ -93,10 +93,10 @@ const (
 	envClusterAAPDeprovisionTemplate = "OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE"
 
 	// Storage controller AAP template overrides
-	envStorageBackendProvisionTemplate   = "OSAC_STORAGE_AAP_BACKEND_PROVISION_TEMPLATE"
-	envStorageBackendDeprovisionTemplate = "OSAC_STORAGE_AAP_BACKEND_DEPROVISION_TEMPLATE"
-	envStorageClassProvisionTemplate     = "OSAC_STORAGE_AAP_CLASS_PROVISION_TEMPLATE"
-	envStorageClassDeprovisionTemplate   = "OSAC_STORAGE_AAP_CLASS_DEPROVISION_TEMPLATE"
+	envStorageBackendProvisionTemplate      = "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE"
+	envStorageBackendDeprovisionTemplate    = "OSAC_STORAGE_BACKEND_AAP_DEPROVISION_TEMPLATE"
+	envClusterStorageProvisionTemplate      = "OSAC_STORAGE_CLUSTER_AAP_PROVISION_TEMPLATE"
+	envClusterStorageDeprovisionTemplate    = "OSAC_STORAGE_CLUSTER_AAP_DEPROVISION_TEMPLATE"
 
 	// Job history configuration
 	envMaxJobHistory = "OSAC_MAX_JOB_HISTORY"
@@ -384,13 +384,13 @@ func setupTenantController(mgr mcmanager.Manager) error {
 }
 
 // setupStorageController registers the OSAC Storage Controller with two AAP
-// provider instances (backend and class).
+// provider instances (backend and cluster-storage).
 func setupStorageController(mgr mcmanager.Manager, maxJobHistory int) error {
 	targetCluster := targetClusterFromManager(mgr)
 	tenantNamespace := os.Getenv(envTenantNamespace)
 
 	var backendProvider provisioning.ProvisioningProvider
-	var classProvider provisioning.ProvisioningProvider
+	var clusterStorageProvider provisioning.ProvisioningProvider
 	var pollInterval time.Duration
 
 	aapURL := os.Getenv(envAAPURL)
@@ -400,8 +400,8 @@ func setupStorageController(mgr mcmanager.Manager, maxJobHistory int) error {
 
 		backendProvisionTemplate := helpers.GetEnvWithDefault(envStorageBackendProvisionTemplate, "osac-create-tenant-storage-backend")
 		backendDeprovisionTemplate := helpers.GetEnvWithDefault(envStorageBackendDeprovisionTemplate, "osac-delete-tenant-storage-backend")
-		classProvisionTemplate := helpers.GetEnvWithDefault(envStorageClassProvisionTemplate, "osac-create-tenant-storage-class")
-		classDeprovisionTemplate := helpers.GetEnvWithDefault(envStorageClassDeprovisionTemplate, "osac-delete-tenant-storage-class")
+		clusterStorageProvisionTemplate := helpers.GetEnvWithDefault(envClusterStorageProvisionTemplate, "osac-create-tenant-cluster-storage")
+		clusterStorageDeprovisionTemplate := helpers.GetEnvWithDefault(envClusterStorageDeprovisionTemplate, "osac-delete-tenant-cluster-storage")
 
 		var err error
 		backendProvider, pollInterval, err = createAAPProvider(
@@ -412,19 +412,19 @@ func setupStorageController(mgr mcmanager.Manager, maxJobHistory int) error {
 			return fmt.Errorf("storage backend provider: %w", err)
 		}
 
-		classProvider, _, err = createAAPProvider(
-			aapURL, aapToken, classProvisionTemplate, classDeprovisionTemplate,
+		clusterStorageProvider, _, err = createAAPProvider(
+			aapURL, aapToken, clusterStorageProvisionTemplate, clusterStorageDeprovisionTemplate,
 			"", aapInsecureSkipVerify,
 		)
 		if err != nil {
-			return fmt.Errorf("storage class provider: %w", err)
+			return fmt.Errorf("cluster storage provider: %w", err)
 		}
 
 		setupLog.Info("storage provisioning configured",
 			"backendProvision", backendProvisionTemplate,
 			"backendDeprovision", backendDeprovisionTemplate,
-			"classProvision", classProvisionTemplate,
-			"classDeprovision", classDeprovisionTemplate)
+			"clusterStorageProvision", clusterStorageProvisionTemplate,
+			"clusterStorageDeprovision", clusterStorageDeprovisionTemplate)
 	}
 
 	if err := (controller.NewStorageReconciler(
@@ -432,7 +432,7 @@ func setupStorageController(mgr mcmanager.Manager, maxJobHistory int) error {
 		tenantNamespace,
 		targetCluster,
 		backendProvider,
-		classProvider,
+		clusterStorageProvider,
 		pollInterval,
 		maxJobHistory,
 	)).SetupWithManager(mgr); err != nil {

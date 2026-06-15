@@ -722,7 +722,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	// If the tenant is not ready, requeue
 	if tenant.Status.Phase != v1alpha1.TenantPhaseReady {
 		msg := fmt.Sprintf("Tenant '%s' is not ready (phase: %s)", tenant.GetName(), tenant.Status.Phase)
-		if scCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageClassReady); scCond != nil && scCond.Message != "" {
+		if scCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady); scCond != nil && scCond.Message != "" {
 			msg = fmt.Sprintf("%s. %s: %s", msg, scCond.Type, scCond.Message)
 		}
 		oldReason := conditionReason(instance, v1alpha1.ComputeInstanceConditionProvisioned)

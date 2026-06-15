@@ -51,19 +51,19 @@ const (
 )
 
 // StorageReconciler reconciles storage lifecycle on Tenant CRs.
-// It owns StorageBackendReady, StorageClassReady conditions,
+// It owns StorageBackendReady, ClusterStorageReady conditions,
 // status.storageClasses, and status.jobs on the Tenant CR.
 type StorageReconciler struct {
 	client.Client
-	Scheme           *runtime.Scheme
-	Recorder         events.EventRecorder
-	tenantNamespace  string
-	mgr              mcmanager.Manager
-	targetCluster    mc.ClusterName
-	BackendProvider  provisioning.ProvisioningProvider
-	ClassProvider    provisioning.ProvisioningProvider
-	StatusPollInterval time.Duration
-	MaxJobHistory    int
+	Scheme                 *runtime.Scheme
+	Recorder               events.EventRecorder
+	tenantNamespace        string
+	mgr                    mcmanager.Manager
+	targetCluster          mc.ClusterName
+	BackendProvider        provisioning.ProvisioningProvider
+	ClusterStorageProvider provisioning.ProvisioningProvider
+	StatusPollInterval     time.Duration
+	MaxJobHistory          int
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=tenants,verbs=get;list;watch;update;patch
@@ -79,7 +79,7 @@ func NewStorageReconciler(
 	tenantNamespace string,
 	targetCluster mc.ClusterName,
 	backendProvider provisioning.ProvisioningProvider,
-	classProvider provisioning.ProvisioningProvider,
+	clusterStorageProvider provisioning.ProvisioningProvider,
 	statusPollInterval time.Duration,
 	maxJobHistory int,
 ) *StorageReconciler {
@@ -96,16 +96,16 @@ func NewStorageReconciler(
 	}
 
 	return &StorageReconciler{
-		Client:           mgr.GetLocalManager().GetClient(),
-		Scheme:           mgr.GetLocalManager().GetScheme(),
-		Recorder:         mgr.GetLocalManager().GetEventRecorder(storageControllerName),
-		tenantNamespace:  tenantNamespace,
-		mgr:              mgr,
-		targetCluster:    targetCluster,
-		BackendProvider:  backendProvider,
-		ClassProvider:    classProvider,
-		StatusPollInterval: statusPollInterval,
-		MaxJobHistory:    maxJobHistory,
+		Client:                 mgr.GetLocalManager().GetClient(),
+		Scheme:                 mgr.GetLocalManager().GetScheme(),
+		Recorder:               mgr.GetLocalManager().GetEventRecorder(storageControllerName),
+		tenantNamespace:        tenantNamespace,
+		mgr:                    mgr,
+		targetCluster:          targetCluster,
+		BackendProvider:        backendProvider,
+		ClusterStorageProvider: clusterStorageProvider,
+		StatusPollInterval:     statusPollInterval,
+		MaxJobHistory:          maxJobHistory,
 	}
 }
 
@@ -210,26 +210,26 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1
 			reason = v1alpha1.TenantReasonMultipleFound
 		}
 		condMsg := result.conditionMessage()
-		instance.SetStatusCondition(v1alpha1.TenantConditionStorageClassReady,
+		instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
 			metav1.ConditionFalse,
 			reason,
 			condMsg)
 
-		if r.ClassProvider != nil && reason == v1alpha1.TenantReasonNotFound {
+		if r.ClusterStorageProvider != nil && reason == v1alpha1.TenantReasonNotFound {
 			return r.handleClassProvisioning(ctx, instance)
 		}
 		return ctrl.Result{}, nil
 	}
 
-	instance.SetStatusCondition(v1alpha1.TenantConditionStorageClassReady,
+	instance.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady,
 		metav1.ConditionTrue,
 		v1alpha1.TenantReasonFound,
 		result.conditionMessage())
 	instance.Status.StorageClasses = result.resolved
 
 	// Poll any non-terminal class provision job before declaring complete
-	latestClassJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeStorageClassProvision)
-	if latestClassJob != nil && !latestClassJob.State.IsTerminal() && r.ClassProvider != nil {
+	latestClassJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeClusterStorageProvision)
+	if latestClassJob != nil && !latestClassJob.State.IsTerminal() && r.ClusterStorageProvider != nil {
 		return r.pollClassProvisionJob(ctx, instance, latestClassJob)
 	}
 
@@ -245,7 +245,7 @@ func (r *StorageReconciler) handleDelete(ctx context.Context, instance *v1alpha1
 	}
 
 	// Stage 1: class cleanup
-	classDeprovJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeStorageClassDeprovision)
+	classDeprovJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeClusterStorageDeprovision)
 	classCleanupDone := classDeprovJob != nil && classDeprovJob.State.IsTerminal() && classDeprovJob.State.IsSuccessful()
 
 	if !classCleanupDone {
@@ -363,7 +363,7 @@ func (r *StorageReconciler) pollBackendProvisionJob(ctx context.Context, instanc
 func (r *StorageReconciler) handleClassProvisioning(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
-	latestJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeStorageClassProvision)
+	latestJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeClusterStorageProvision)
 
 	if latestJob != nil && latestJob.State == v1alpha1.JobStateFailed {
 		log.Info("latest class provision job failed, waiting for external trigger to retry",
@@ -372,8 +372,8 @@ func (r *StorageReconciler) handleClassProvisioning(ctx context.Context, instanc
 	}
 
 	if needsProvisionJob(latestJob) {
-		log.Info("triggering class provisioning", "provider", r.ClassProvider.Name())
-		result, err := r.ClassProvider.TriggerProvision(ctx, instance)
+		log.Info("triggering class provisioning", "provider", r.ClusterStorageProvider.Name())
+		result, err := r.ClusterStorageProvider.TriggerProvision(ctx, instance)
 		if err != nil {
 			var rateLimitErr *provisioning.RateLimitError
 			if errors.As(err, &rateLimitErr) {
@@ -384,7 +384,7 @@ func (r *StorageReconciler) handleClassProvisioning(ctx context.Context, instanc
 			log.Error(err, "failed to trigger class provisioning")
 			newJob := v1alpha1.JobStatus{
 				JobID:     "",
-				Type:      v1alpha1.JobTypeStorageClassProvision,
+				Type:      v1alpha1.JobTypeClusterStorageProvision,
 				Timestamp: metav1.NewTime(time.Now().UTC()),
 				State:     v1alpha1.JobStateFailed,
 				Message:   fmt.Sprintf("Failed to trigger class provisioning: %v", err),
@@ -395,7 +395,7 @@ func (r *StorageReconciler) handleClassProvisioning(ctx context.Context, instanc
 
 		newJob := v1alpha1.JobStatus{
 			JobID:     result.JobID,
-			Type:      v1alpha1.JobTypeStorageClassProvision,
+			Type:      v1alpha1.JobTypeClusterStorageProvision,
 			Timestamp: metav1.NewTime(time.Now().UTC()),
 			State:     result.InitialState,
 			Message:   result.Message,
@@ -411,7 +411,7 @@ func (r *StorageReconciler) handleClassProvisioning(ctx context.Context, instanc
 func (r *StorageReconciler) pollClassProvisionJob(ctx context.Context, instance *v1alpha1.Tenant, latestJob *v1alpha1.JobStatus) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
-	status, err := r.ClassProvider.GetProvisionStatus(ctx, instance, latestJob.JobID)
+	status, err := r.ClusterStorageProvider.GetProvisionStatus(ctx, instance, latestJob.JobID)
 	if err != nil {
 		log.Error(err, "failed to get class provision job status", "jobID", latestJob.JobID)
 		updatedJob := *latestJob
@@ -444,16 +444,16 @@ func (r *StorageReconciler) pollClassProvisionJob(ctx context.Context, instance 
 func (r *StorageReconciler) handleClassDeprovisioning(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx)
 
-	if r.ClassProvider == nil {
+	if r.ClusterStorageProvider == nil {
 		log.Info("no class provider configured, skipping cluster-side cleanup")
 		return ctrl.Result{}, nil
 	}
 
-	latestJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeStorageClassDeprovision)
+	latestJob := provisioning.FindLatestJobByType(instance.Status.Jobs, v1alpha1.JobTypeClusterStorageDeprovision)
 
 	if latestJob == nil || latestJob.JobID == "" {
-		log.Info("triggering class deprovisioning", "provider", r.ClassProvider.Name())
-		result, err := r.ClassProvider.TriggerDeprovision(ctx, instance)
+		log.Info("triggering class deprovisioning", "provider", r.ClusterStorageProvider.Name())
+		result, err := r.ClusterStorageProvider.TriggerDeprovision(ctx, instance)
 		if err != nil {
 			var rateLimitErr *provisioning.RateLimitError
 			if errors.As(err, &rateLimitErr) {
@@ -462,7 +462,7 @@ func (r *StorageReconciler) handleClassDeprovisioning(ctx context.Context, insta
 			log.Error(err, "failed to trigger class deprovisioning")
 			newJob := v1alpha1.JobStatus{
 				JobID:     "",
-				Type:      v1alpha1.JobTypeStorageClassDeprovision,
+				Type:      v1alpha1.JobTypeClusterStorageDeprovision,
 				Timestamp: metav1.NewTime(time.Now().UTC()),
 				State:     v1alpha1.JobStateFailed,
 				Message:   fmt.Sprintf("Failed to trigger class deprovisioning: %v", err),
@@ -475,7 +475,7 @@ func (r *StorageReconciler) handleClassDeprovisioning(ctx context.Context, insta
 		case provisioning.DeprovisionTriggered:
 			newJob := v1alpha1.JobStatus{
 				JobID:                  result.JobID,
-				Type:                   v1alpha1.JobTypeStorageClassDeprovision,
+				Type:                   v1alpha1.JobTypeClusterStorageDeprovision,
 				Timestamp:              metav1.NewTime(time.Now().UTC()),
 				State:                  v1alpha1.JobStatePending,
 				Message:                "Class deprovisioning job triggered",
@@ -492,7 +492,7 @@ func (r *StorageReconciler) handleClassDeprovisioning(ctx context.Context, insta
 		}
 	}
 
-	return r.pollDeprovisionJob(ctx, instance, latestJob, r.ClassProvider)
+	return r.pollDeprovisionJob(ctx, instance, latestJob, r.ClusterStorageProvider)
 }
 
 func (r *StorageReconciler) handleBackendDeprovisioning(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {

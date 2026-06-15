@@ -21,11 +21,16 @@ spec:
     - jsonPath: .status.storageClasses[*].name
       name: Storage Classes
       type: string
-    - jsonPath: .status.storageClasses[*].tier
-      name: Storage Tiers
-      type: string
     - jsonPath: .status.phase
       name: Phase
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="StorageBackendReady")].status
+      name: Backend Ready
+      priority: 1
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="ClusterStorageReady")].status
+      name: Cluster Storage
+      priority: 1
       type: string
     name: v1alpha1
     schema:
@@ -55,6 +60,32 @@ spec:
           status:
             description: TenantStatus defines the observed state of Tenant.
             properties:
+              clusterStorage:
+                description: ClusterStorage tracks per-cluster StorageClass installation
+                  status.
+                items:
+                  description: ClusterStorageStatus tracks StorageClass installation
+                    status for a single cluster.
+                  properties:
+                    clusterName:
+                      description: ClusterName identifies the target cluster.
+                      type: string
+                    ready:
+                      description: Ready indicates whether StorageClasses are installed
+                        on this cluster.
+                      type: boolean
+                    reason:
+                      description: Reason provides a machine-readable reason for the
+                        current state.
+                      type: string
+                  required:
+                  - clusterName
+                  - ready
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - clusterName
+                x-kubernetes-list-type: map
               conditions:
                 description: Conditions holds an array of metav1.Condition that describe
                   the state of the Tenant
@@ -160,6 +191,10 @@ spec:
                       enum:
                       - provision
                       - deprovision
+                      - storage-backend-provision
+                      - storage-backend-deprovision
+                      - cluster-storage-provision
+                      - cluster-storage-deprovision
                       type: string
                   required:
                   - jobID
@@ -175,6 +210,35 @@ spec:
               phase:
                 description: Phase is the phase of the tenant
                 type: string
+              storageBackends:
+                description: StorageBackends tracks per-backend provisioning status.
+                items:
+                  description: StorageBackendStatus tracks provisioning status for
+                    a single storage backend.
+                  properties:
+                    message:
+                      description: Message provides human-readable status or error
+                        information.
+                      type: string
+                    name:
+                      description: Name is the storage backend identifier (e.g., "vast-1").
+                      type: string
+                    provider:
+                      description: Provider is the storage provider type (e.g., "vast").
+                      type: string
+                    ready:
+                      description: Ready indicates whether this backend is provisioned
+                        for the tenant.
+                      type: boolean
+                  required:
+                  - name
+                  - provider
+                  - ready
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               storageClasses:
                 description: |-
                   StorageClasses lists all resolved StorageClass mappings for the tenant,
@@ -182,7 +246,7 @@ spec:
                 items:
                   description: |-
                     ResolvedStorageClass captures a single resolved StorageClass for a specific
-                    storage tier. The Tenant controller populates one entry per tier.
+                    storage tier. The OSAC Storage Controller populates one entry per tier.
                   properties:
                     name:
                       description: Name is the name of the resolved Kubernetes StorageClass.

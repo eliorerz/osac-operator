@@ -1807,7 +1807,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			DeferCleanup(func() { deleteCI(resourceName) })
 			DeferCleanup(func() { deleteTenantInNamespace(ctx, namespaceName, tenantName) })
 
-			// Create tenant in Progressing state (no StorageClassReady condition)
+			// Create tenant in Progressing state (no ClusterStorageReady condition)
 			tenant := &osacv1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
 			}
@@ -1848,20 +1848,20 @@ var _ = Describe("ComputeInstance Controller", func() {
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
 
-		It("should include StorageClassReady condition in Provisioned message", func() {
+		It("should include ClusterStorageReady condition in Provisioned message", func() {
 			const resourceName = "test-ci-tenant-sc-msg"
 			const tenantName = "tenant-sc-msg"
 			DeferCleanup(func() { deleteCI(resourceName) })
 			DeferCleanup(func() { deleteTenantInNamespace(ctx, namespaceName, tenantName) })
 
-			// Create tenant in Progressing state with a StorageClassReady condition
+			// Create tenant in Progressing state with a ClusterStorageReady condition
 			tenant := &osacv1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespaceName},
 			}
 			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 			tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
 			tenant.SetStatusCondition(
-				osacv1alpha1.TenantConditionStorageClassReady,
+				osacv1alpha1.TenantConditionClusterStorageReady,
 				metav1.ConditionFalse,
 				osacv1alpha1.TenantReasonMultipleFound,
 				"Multiple StorageClasses found with label osac.openshift.io/tenant="+tenantName+": sc1, sc2",
@@ -1897,7 +1897,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 				g.Expect(cond).NotTo(BeNil())
 				g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 				g.Expect(cond.Reason).To(Equal("TenantNotReady"))
-				g.Expect(cond.Message).To(ContainSubstring("StorageClassReady"))
+				g.Expect(cond.Message).To(ContainSubstring("ClusterStorageReady"))
 				g.Expect(cond.Message).To(ContainSubstring("sc1, sc2"))
 			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
 		})
@@ -1915,7 +1915,7 @@ var _ = Describe("ComputeInstance Controller", func() {
 			Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
 			tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
 			tenant.SetStatusCondition(
-				osacv1alpha1.TenantConditionStorageClassReady,
+				osacv1alpha1.TenantConditionClusterStorageReady,
 				metav1.ConditionFalse,
 				osacv1alpha1.TenantReasonMultipleFound,
 				"Multiple StorageClasses found",

@@ -183,6 +183,10 @@ spec:
                       enum:
                       - provision
                       - deprovision
+                      - storage-backend-provision
+                      - storage-backend-deprovision
+                      - cluster-storage-provision
+                      - cluster-storage-deprovision
                       type: string
                   required:
                   - jobID

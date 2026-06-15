@@ -49,17 +49,23 @@ const (
 	// Owned by the OSAC Storage Controller.
 	TenantConditionStorageBackendReady TenantConditionType = "StorageBackendReady"
 
-	// TenantConditionStorageClassReady indicates whether StorageClasses have been
-	// resolved for the tenant on the target cluster.
+	// TenantConditionClusterStorageReady indicates whether StorageClasses and CSI
+	// drivers are installed on the target cluster for this tenant.
 	// Owned by the OSAC Storage Controller.
-	TenantConditionStorageClassReady TenantConditionType = "StorageClassReady"
+	TenantConditionClusterStorageReady TenantConditionType = "ClusterStorageReady"
 )
 
 // Reason constants for Tenant conditions
 const (
-	TenantReasonFound         = "Found"
-	TenantReasonNotFound      = "NotFound"
-	TenantReasonMultipleFound = "MultipleFound"
+	TenantReasonFound              = "Found"
+	TenantReasonNotFound           = "NotFound"
+	TenantReasonMultipleFound      = "MultipleFound"
+	TenantReasonProvisioning       = "Provisioning"
+	TenantReasonProvisionFailed    = "ProvisionFailed"
+	TenantReasonDeprovisioning     = "Deprovisioning"
+	TenantReasonDeprovisionFailed  = "DeprovisionFailed"
+	TenantReasonSecretNotFound     = "SecretNotFound"
+	TenantReasonTenantNotReady     = "TenantNotReady"
 )
 
 // ResolvedStorageClass captures a single resolved StorageClass for a specific
@@ -77,6 +83,28 @@ type ResolvedStorageClass struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$`
 	Tier string `json:"tier"`
+}
+
+// StorageBackendStatus tracks provisioning status for a single storage backend.
+type StorageBackendStatus struct {
+	// Name is the storage backend identifier (e.g., "vast-1").
+	Name string `json:"name"`
+	// Provider is the storage provider type (e.g., "vast").
+	Provider string `json:"provider"`
+	// Ready indicates whether this backend is provisioned for the tenant.
+	Ready bool `json:"ready"`
+	// Message provides human-readable status or error information.
+	Message string `json:"message,omitempty"`
+}
+
+// ClusterStorageStatus tracks StorageClass installation status for a single cluster.
+type ClusterStorageStatus struct {
+	// ClusterName identifies the target cluster.
+	ClusterName string `json:"clusterName"`
+	// Ready indicates whether StorageClasses are installed on this cluster.
+	Ready bool `json:"ready"`
+	// Reason provides a machine-readable reason for the current state.
+	Reason string `json:"reason,omitempty"`
 }
 
 // TenantStatus defines the observed state of Tenant.
@@ -100,16 +128,27 @@ type TenantStatus struct {
 
 	// Jobs holds the history of provisioning jobs triggered for this tenant
 	Jobs []JobStatus `json:"jobs,omitempty"`
+
+	// StorageBackends tracks per-backend provisioning status.
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=name
+	StorageBackends []StorageBackendStatus `json:"storageBackends,omitempty"`
+
+	// ClusterStorage tracks per-cluster StorageClass installation status.
+	// +kubebuilder:validation:Optional
+	// +listType=map
+	// +listMapKey=clusterName
+	ClusterStorage []ClusterStorageStatus `json:"clusterStorage,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Tenant Namespace",type=string,JSONPath=`.status.namespace`
 // +kubebuilder:printcolumn:name="Storage Classes",type=string,JSONPath=`.status.storageClasses[*].name`
-// +kubebuilder:printcolumn:name="Storage Tiers",type=string,JSONPath=`.status.storageClasses[*].tier`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
-// +kubebuilder:printcolumn:name="StorageBackendReady",type=string,JSONPath=`.status.conditions[?(@.type=="StorageBackendReady")].status`,priority=1
-// +kubebuilder:printcolumn:name="StorageClassReady",type=string,JSONPath=`.status.conditions[?(@.type=="StorageClassReady")].status`,priority=1
+// +kubebuilder:printcolumn:name="Backend Ready",type=string,JSONPath=`.status.conditions[?(@.type=="StorageBackendReady")].status`,priority=1
+// +kubebuilder:printcolumn:name="Cluster Storage",type=string,JSONPath=`.status.conditions[?(@.type=="ClusterStorageReady")].status`,priority=1
 
 // Tenant is the Schema for the tenants API.
 type Tenant struct {
