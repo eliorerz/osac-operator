@@ -24,8 +24,8 @@ import (
 	"strings"
 
 	storagev1 "k8s.io/api/storage/v1"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 )

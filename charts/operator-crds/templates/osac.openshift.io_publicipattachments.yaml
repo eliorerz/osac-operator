@@ -1,10 +1,8 @@
-{{- if .Values.install }}
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    "helm.sh/resource-policy": keep
     controller-gen.kubebuilder.io/version: v0.20.0
   name: publicipattachments.osac.openshift.io
 spec:
@@ -185,6 +183,10 @@ spec:
                       enum:
                       - provision
                       - deprovision
+                      - storage-backend-provision
+                      - storage-backend-deprovision
+                      - cluster-storage-provision
+                      - cluster-storage-deprovision
                       type: string
                   required:
                   - jobID
@@ -210,4 +212,3 @@ spec:
     storage: true
     subresources:
       status: {}
-{{- end }}

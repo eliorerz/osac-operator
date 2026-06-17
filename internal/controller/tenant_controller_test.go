@@ -25,11 +25,12 @@ import (
 
 	"github.com/osac-project/osac-operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 func mcReconcileRequest(nn types.NamespacedName) mcreconcile.Request {
@@ -53,7 +54,9 @@ var _ = Describe("Tenant Controller", func() {
 					},
 				},
 			}
-			Expect(k8sClient.Create(ctx, ns)).To(Succeed())
+			if err := k8sClient.Create(ctx, ns); err != nil {
+				Expect(apierrors.IsAlreadyExists(err)).To(BeTrue())
+			}
 
 			tenant := &v1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{

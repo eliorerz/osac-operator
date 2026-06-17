@@ -93,10 +93,10 @@ const (
 	envClusterAAPDeprovisionTemplate = "OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE"
 
 	// Storage controller AAP template overrides
-	envStorageBackendProvisionTemplate      = "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE"
-	envStorageBackendDeprovisionTemplate    = "OSAC_STORAGE_BACKEND_AAP_DEPROVISION_TEMPLATE"
-	envClusterStorageProvisionTemplate      = "OSAC_STORAGE_CLUSTER_AAP_PROVISION_TEMPLATE"
-	envClusterStorageDeprovisionTemplate    = "OSAC_STORAGE_CLUSTER_AAP_DEPROVISION_TEMPLATE"
+	envStorageBackendProvisionTemplate   = "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE"
+	envStorageBackendDeprovisionTemplate = "OSAC_STORAGE_BACKEND_AAP_DEPROVISION_TEMPLATE"
+	envClusterStorageProvisionTemplate   = "OSAC_STORAGE_CLUSTER_AAP_PROVISION_TEMPLATE"
+	envClusterStorageDeprovisionTemplate = "OSAC_STORAGE_CLUSTER_AAP_DEPROVISION_TEMPLATE"
 
 	// Job history configuration
 	envMaxJobHistory = "OSAC_MAX_JOB_HISTORY"
@@ -398,10 +398,14 @@ func setupStorageController(mgr mcmanager.Manager, maxJobHistory int) error {
 	if aapURL != "" && aapToken != "" {
 		aapInsecureSkipVerify := helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false)
 
-		backendProvisionTemplate := helpers.GetEnvWithDefault(envStorageBackendProvisionTemplate, "osac-create-tenant-storage-backend")
-		backendDeprovisionTemplate := helpers.GetEnvWithDefault(envStorageBackendDeprovisionTemplate, "osac-delete-tenant-storage-backend")
-		clusterStorageProvisionTemplate := helpers.GetEnvWithDefault(envClusterStorageProvisionTemplate, "osac-create-tenant-cluster-storage")
-		clusterStorageDeprovisionTemplate := helpers.GetEnvWithDefault(envClusterStorageDeprovisionTemplate, "osac-delete-tenant-cluster-storage")
+		backendProvisionTemplate := helpers.GetEnvWithDefault(
+			envStorageBackendProvisionTemplate, "osac-create-tenant-storage-backend")
+		backendDeprovisionTemplate := helpers.GetEnvWithDefault(
+			envStorageBackendDeprovisionTemplate, "osac-delete-tenant-storage-backend")
+		clusterStorageProvisionTemplate := helpers.GetEnvWithDefault(
+			envClusterStorageProvisionTemplate, "osac-create-tenant-cluster-storage")
+		clusterStorageDeprovisionTemplate := helpers.GetEnvWithDefault(
+			envClusterStorageDeprovisionTemplate, "osac-delete-tenant-cluster-storage")
 
 		var err error
 		backendProvider, pollInterval, err = createAAPProvider(

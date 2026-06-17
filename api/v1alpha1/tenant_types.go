@@ -57,15 +57,15 @@ const (
 
 // Reason constants for Tenant conditions
 const (
-	TenantReasonFound              = "Found"
-	TenantReasonNotFound           = "NotFound"
-	TenantReasonMultipleFound      = "MultipleFound"
-	TenantReasonProvisioning       = "Provisioning"
-	TenantReasonProvisionFailed    = "ProvisionFailed"
-	TenantReasonDeprovisioning     = "Deprovisioning"
-	TenantReasonDeprovisionFailed  = "DeprovisionFailed"
-	TenantReasonSecretNotFound     = "SecretNotFound"
-	TenantReasonTenantNotReady     = "TenantNotReady"
+	TenantReasonFound             = "Found"
+	TenantReasonNotFound          = "NotFound"
+	TenantReasonMultipleFound     = "MultipleFound"
+	TenantReasonProvisioning      = "Provisioning"
+	TenantReasonProvisionFailed   = "ProvisionFailed"
+	TenantReasonDeprovisioning    = "Deprovisioning"
+	TenantReasonDeprovisionFailed = "DeprovisionFailed"
+	TenantReasonSecretNotFound    = "SecretNotFound"
+	TenantReasonTenantNotReady    = "TenantNotReady"
 )
 
 // ResolvedStorageClass captures a single resolved StorageClass for a specific
@@ -164,7 +164,6 @@ func (t *Tenant) GetStatusJobs() []JobStatus {
 	return t.Status.Jobs
 }
 
-
 // +kubebuilder:object:root=true
 
 // TenantList contains a list of Tenant.
@@ -173,4 +172,3 @@ type TenantList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Tenant `json:"items"`
 }
-

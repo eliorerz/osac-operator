@@ -39,9 +39,6 @@ const (
 
 	// eventActionDetectDuplicate is the event action for duplicate StorageClass detection
 	eventActionDetectDuplicate = "DetectDuplicate"
-
-	// eventReasonStorageClassNotReady is the event reason emitted when no storage tier resolves
-	eventReasonStorageClassNotReady = "StorageClassNotReady"
 )
 
 var (
