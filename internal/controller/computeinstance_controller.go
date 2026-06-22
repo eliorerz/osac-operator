@@ -451,7 +451,9 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 			},
 		},
 		func() bool {
-			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.mgr.GetLocalManager().GetAPIReader(), client.ObjectKeyFromObject(instance), &v1alpha1.ComputeInstance{}, func(obj client.Object) []v1alpha1.JobStatus { return obj.(*v1alpha1.ComputeInstance).Status.ProvisioningJobs })
+			return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.mgr.GetLocalManager().GetAPIReader(), client.ObjectKeyFromObject(instance), &v1alpha1.ComputeInstance{}, func(obj client.Object) []v1alpha1.JobStatus {
+				return obj.(*v1alpha1.ComputeInstance).Status.ProvisioningJobs
+			})
 		},
 		func() error {
 			return r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status)
