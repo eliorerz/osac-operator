@@ -17,8 +17,11 @@ spec:
       labels:
         {{- include "osac-operator.selectorLabels" . | nindent 8 }}
     spec:
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: manager
         command:
