@@ -26,6 +26,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -431,6 +432,8 @@ func (r *StorageReconciler) updateTenantClusterStorage(tenant *v1alpha1.Tenant, 
 	reason := v1alpha1.TenantReasonNotFound
 	if ready {
 		reason = v1alpha1.TenantReasonFound
+	} else if cond := apimeta.FindStatusCondition(co.Status.Conditions, string(v1alpha1.ClusterOrderConditionClusterStorageReady)); cond != nil {
+		reason = cond.Reason
 	}
 
 	for i, cs := range tenant.Status.ClusterStorage {
@@ -804,8 +807,10 @@ func (r *StorageReconciler) mapClusterOrderToTenant(ctx context.Context, obj cli
 // reading the HostedControlPlane's kubeConfig Secret reference. Returns nil
 // without error if the HostedControlPlane or Secret is not yet available.
 func (r *StorageReconciler) getClusterKubeconfig(ctx context.Context, clusterOrder *v1alpha1.ClusterOrder) ([]byte, error) {
+	log := ctrllog.FromContext(ctx)
 	ref := clusterOrder.Status.ClusterReference
 	if ref == nil || ref.Namespace == "" || ref.HostedClusterName == "" {
+		log.V(1).Info("no cluster reference on ClusterOrder", "clusterOrder", clusterOrder.Name)
 		return nil, nil
 	}
 
@@ -817,10 +822,14 @@ func (r *StorageReconciler) getClusterKubeconfig(ctx context.Context, clusterOrd
 		if client.IgnoreNotFound(err) != nil {
 			return nil, fmt.Errorf("get HostedControlPlane %s/%s: %w", ref.Namespace, ref.HostedClusterName, err)
 		}
+		log.Info("HostedControlPlane not found", "clusterOrder", clusterOrder.Name,
+			"namespace", ref.Namespace, "hostedClusterName", ref.HostedClusterName)
 		return nil, nil
 	}
 
 	if hcp.Status.KubeConfig == nil || hcp.Status.KubeConfig.Name == "" {
+		log.Info("HostedControlPlane kubeConfig reference not yet populated",
+			"clusterOrder", clusterOrder.Name, "hostedControlPlane", hcp.Name)
 		return nil, nil
 	}
 
@@ -832,11 +841,15 @@ func (r *StorageReconciler) getClusterKubeconfig(ctx context.Context, clusterOrd
 		if client.IgnoreNotFound(err) != nil {
 			return nil, fmt.Errorf("get kubeconfig Secret %s/%s: %w", ref.Namespace, hcp.Status.KubeConfig.Name, err)
 		}
+		log.Info("kubeconfig Secret not found", "clusterOrder", clusterOrder.Name,
+			"secret", hcp.Status.KubeConfig.Name, "namespace", ref.Namespace)
 		return nil, nil
 	}
 
 	kubeconfig, exists := secret.Data[hcp.Status.KubeConfig.Key]
 	if !exists || len(kubeconfig) == 0 {
+		log.Info("kubeconfig key missing or empty in Secret", "clusterOrder", clusterOrder.Name,
+			"secret", secret.Name, "key", hcp.Status.KubeConfig.Key)
 		return nil, nil
 	}
 
