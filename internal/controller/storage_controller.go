@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -147,13 +148,35 @@ func (r *StorageReconciler) Reconcile(ctx context.Context, req mcreconcile.Reque
 
 	if !equality.Semantic.DeepEqual(instance.Status, *oldstatus) {
 		log.Info("storage status requires update")
-		if updateErr := r.Status().Update(ctx, instance); updateErr != nil {
+		if updateErr := r.updateTenantStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status); updateErr != nil {
 			return ctrl.Result{}, updateErr
 		}
 	}
 
 	log.Info("end storage reconcile")
 	return res, err
+}
+
+func (r *StorageReconciler) updateTenantStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.TenantStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.Tenant{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
+}
+
+func (r *StorageReconciler) updateClusterOrderStatusWithRetry(ctx context.Context, key client.ObjectKey, newStatus v1alpha1.ClusterOrderStatus) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &v1alpha1.ClusterOrder{}
+		if err := r.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		latest.Status = newStatus
+		return r.Status().Update(ctx, latest)
+	})
 }
 
 func (r *StorageReconciler) handleUpdate(ctx context.Context, instance *v1alpha1.Tenant) (ctrl.Result, error) {
@@ -421,7 +444,7 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, instance *v1al
 				metav1.ConditionFalse,
 				"Kubeconfig not yet available for CaaS cluster",
 				"KubeConfigNotAvailable")
-			if err := r.Status().Update(ctx, co); err != nil {
+			if err := r.updateClusterOrderStatusWithRetry(ctx, client.ObjectKeyFromObject(co), co.Status); err != nil {
 				return ctrl.Result{}, fmt.Errorf("update ClusterOrder %s status: %w", co.Name, err)
 			}
 			continue
@@ -439,7 +462,7 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, instance *v1al
 						return obj.(*v1alpha1.ClusterOrder).Status.ClusterStorageJobs
 					})
 			},
-			func() error { return r.Status().Update(ctx, co) },
+			func() error { return r.updateClusterOrderStatusWithRetry(ctx, client.ObjectKeyFromObject(co), co.Status) },
 		)
 		if provErr != nil {
 			co.SetStatusCondition(
@@ -447,14 +470,14 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, instance *v1al
 				metav1.ConditionFalse,
 				fmt.Sprintf("Provisioning failed: %v", provErr),
 				"ProvisionFailed")
-			if updateErr := r.Status().Update(ctx, co); updateErr != nil {
+			if updateErr := r.updateClusterOrderStatusWithRetry(ctx, client.ObjectKeyFromObject(co), co.Status); updateErr != nil {
 				log.Error(updateErr, "failed to update ClusterOrder status after provision error", "clusterOrder", co.Name)
 			}
 			return provResult, provErr
 		}
 
 		if provResult.RequeueAfter > 0 {
-			if err := r.Status().Update(ctx, co); err != nil {
+			if err := r.updateClusterOrderStatusWithRetry(ctx, client.ObjectKeyFromObject(co), co.Status); err != nil {
 				return ctrl.Result{}, fmt.Errorf("update ClusterOrder %s status: %w", co.Name, err)
 			}
 			return provResult, nil
@@ -495,7 +518,7 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, instance *v1al
 				reason)
 		}
 
-		if err := r.Status().Update(ctx, co); err != nil {
+		if err := r.updateClusterOrderStatusWithRetry(ctx, client.ObjectKeyFromObject(co), co.Status); err != nil {
 			return ctrl.Result{}, fmt.Errorf("update ClusterOrder %s status: %w", co.Name, err)
 		}
 
@@ -616,7 +639,7 @@ func (r *StorageReconciler) handleBackendProvisioning(ctx context.Context, insta
 					return obj.(*v1alpha1.Tenant).Status.StorageBackendJobs
 				})
 		},
-		func() error { return r.Status().Update(ctx, instance) },
+		func() error { return r.updateTenantStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status) },
 	)
 }
 
@@ -640,7 +663,7 @@ func (r *StorageReconciler) handleClusterStorageProvisioning(ctx context.Context
 					return obj.(*v1alpha1.Tenant).Status.ClusterStorageJobs
 				})
 		},
-		func() error { return r.Status().Update(ctx, instance) },
+		func() error { return r.updateTenantStatusWithRetry(ctx, client.ObjectKeyFromObject(instance), instance.Status) },
 	)
 }
 
@@ -706,13 +729,13 @@ func (r *StorageReconciler) handleCaaSDelete(ctx context.Context, instance *v1al
 			result, done, err := provisioning.RunDeprovisioningLifecycle(provCtx, r.ClusterStorageProvider, co,
 				&co.Status.ClusterStorageJobs, r.MaxJobHistory, r.StatusPollInterval)
 			if err != nil {
-				if updateErr := r.Status().Update(ctx, co); updateErr != nil {
+				if updateErr := r.updateClusterOrderStatusWithRetry(ctx, client.ObjectKeyFromObject(co), co.Status); updateErr != nil {
 					log.Error(updateErr, "failed to update ClusterOrder status after teardown error", "clusterOrder", co.Name)
 				}
 				return result, err
 			}
 			if !done {
-				if updateErr := r.Status().Update(ctx, co); updateErr != nil {
+				if updateErr := r.updateClusterOrderStatusWithRetry(ctx, client.ObjectKeyFromObject(co), co.Status); updateErr != nil {
 					log.Error(updateErr, "failed to update ClusterOrder status during teardown", "clusterOrder", co.Name)
 				}
 				return result, nil
