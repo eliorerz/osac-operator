@@ -96,7 +96,6 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			result, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(Equal(statusPollInterval))
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 
 			instance = getClusterOrder(name)
 			job := provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
@@ -121,8 +120,8 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			result, err = reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result.RequeueAfter).To(BeZero(), "should not requeue after terminal success")
-
 			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+
 			instance = getClusterOrder(name)
 			job = provisioning.FindLatestJobByType(instance.Status.ProvisioningJobs, osacv1alpha1.JobTypeProvision)
 			Expect(job.State).To(Equal(osacv1alpha1.JobStateSucceeded))
@@ -140,11 +139,12 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			// Trigger and fail
 			_, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			instance = getClusterOrder(name)
 
 			provider.setProvisionJobState(osacv1alpha1.JobStateFailed, "No agents available")
 			_, err = reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 			Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ClusterOrderPhaseFailed))
 		})
 
@@ -160,7 +160,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			// First reconcile triggers and persists
 			_, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			instance = getClusterOrder(name)
 
 			// Simulate stale cache: in-memory instance has no jobs
 			staleInstance := &osacv1alpha1.ClusterOrder{
@@ -287,7 +287,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			// Trigger and fail
 			_, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			instance = getClusterOrder(name)
 
 			provider.setProvisionJobState(osacv1alpha1.JobStateFailed, "Failed")
 			_, err = reconciler.handleProvisioning(ctx, instance)
@@ -315,7 +315,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			// First failure: trigger → poll (fails) → backoff
 			_, err := reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			instance = getClusterOrder(name)
 
 			provider.setProvisionJobState(osacv1alpha1.JobStateFailed, "Failed")
 			_, err = reconciler.handleProvisioning(ctx, instance)
@@ -340,7 +340,7 @@ var _ = Describe("ClusterOrder Integration Tests", func() {
 			instance = getClusterOrder(name)
 			_, err = reconciler.handleProvisioning(ctx, instance)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+			instance = getClusterOrder(name)
 			Expect(countProvisionJobs(instance)).To(Equal(2), "should create new job after backoff elapsed")
 
 			provider.setProvisionJobState(osacv1alpha1.JobStateFailed, "Failed again")
