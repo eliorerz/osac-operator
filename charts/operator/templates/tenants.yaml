@@ -7,5 +7,17 @@ metadata:
   name: {{ .name }}
   namespace: {{ $.Release.Namespace }}
 spec: {}
+{{- if $.Values.controllers.storage }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vast-tenant-config-{{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    osac.openshift.io/tenant: {{ .name | quote }}
+type: Opaque
+data: {}
+{{- end }}
 {{- end }}
 {{- end }}
