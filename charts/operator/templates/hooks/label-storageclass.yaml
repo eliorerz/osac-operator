@@ -1,4 +1,4 @@
-{{- if .Values.tenants }}
+{{- if .Values.controllers.storageController }}
 ---
 apiVersion: v1
 kind: ServiceAccount
