@@ -38,7 +38,7 @@ spec:
               optional: {{ .Values.configSecret.optional }}
         env:
           - name: OSAC_AAP_URL
-            value: {{ required "aap.url is required" .Values.aap.url | quote }}
+            value: {{ .Values.aap.url | default "http://osac-aap/api/controller" | quote }}
           {{- if and .Values.aap.tokenSecret .Values.aap.tokenSecret.name }}
           - name: OSAC_AAP_TOKEN
             valueFrom:
